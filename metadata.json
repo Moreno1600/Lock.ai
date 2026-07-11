@@ -1,0 +1,6 @@
+{
+  "name": "Lock.Ai",
+  "description": "Pro-grade sports betting platform with AI Daily Locks, Line Movement Tracking, Private Squads, Injury Impact Analysis, and Weekly Recaps.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
