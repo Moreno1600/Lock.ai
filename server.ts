@@ -12,23 +12,29 @@ dotenv.config();
 const PORT = 3000;
 const CURRENT_SEASON = "2025-26"; // Update as needed
 
-// Social Store (In-memory for demo)
-const reactionsStore: Record<string, Record<string, number>> = {};
-const commentsStore: Record<string, Array<{id: string, user: string, text: string, timestamp: string}>> = {};
-const pollsStore: Record<string, {over: number, under: number, winners: string[]}> = {};
+// Season calendars — when a sport is in its off-season, endpoints return empty
+// data and the UI shows an "unavailable" notice instead of mock games.
+function getSeasonStatus() {
+  const now = new Date();
+  const m = now.getMonth(); // 0 = January
+  const d = now.getDate();
+
+  // NBA: ~Oct 20 through the Finals (~June 22)
+  const nbaActive = (m === 9 && d >= 20) || m >= 10 || m <= 4 || (m === 5 && d <= 22);
+  // MLB: ~Mar 25 through the World Series (~Nov 5)
+  const mlbActive = (m === 2 && d >= 25) || (m >= 3 && m <= 9) || (m === 10 && d <= 5);
+  // Soccer (European leagues): ~Aug 10 through May
+  const soccerActive = (m === 7 && d >= 10) || m >= 8 || m <= 4;
+
+  return {
+    NBA: { active: nbaActive, resumes: "late October" },
+    MLB: { active: mlbActive, resumes: "late March" },
+    SOCCER: { active: soccerActive, resumes: "mid-August" }
+  };
+}
 
 // Feature 3: Line Movement Store
 const lineMovementStore: Record<string, Array<{line: number, time: string}>> = {};
-
-// Feature 2: Daily Lock Store
-let dailyLock: any = {
-  playerName: "Shai Gilgeous-Alexander",
-  playerId: 1628983,
-  sport: "NBA",
-  line: "Over 29.5 Points",
-  lockScore: 99,
-  reason: "SGA has been red-hot, clearing 30 points in 4 consecutive games. Facing the young Spurs perimeter defense, his mid-range attacking style is primed for historical efficiency."
-};
 
 // NBA API Headers to avoid blocking
 const nbaHeaders = {
@@ -129,17 +135,17 @@ const fetchWithRetry = async (targetUrl: string, headers: any, retries = 2): Pro
 
 // In-memory cache for players list - pre-populate with fallback for immediate availability
 let playersCache: any[] = [
-  { PERSON_ID: 1629029, DISPLAY_FIRST_LAST: "Luka Doncic", TEAM_ABBREVIATION: "DAL", TEAM_ID: 1610612742 },
+  { PERSON_ID: 1629029, DISPLAY_FIRST_LAST: "Luka Doncic", TEAM_ABBREVIATION: "LAL", TEAM_ID: 1610612747 },
   { PERSON_ID: 202681, DISPLAY_FIRST_LAST: "Kyrie Irving", TEAM_ABBREVIATION: "DAL", TEAM_ID: 1610612742 },
   { PERSON_ID: 2544, DISPLAY_FIRST_LAST: "LeBron James", TEAM_ABBREVIATION: "LAL", TEAM_ID: 1610612747 },
-  { PERSON_ID: 203076, DISPLAY_FIRST_LAST: "Anthony Davis", TEAM_ABBREVIATION: "LAL", TEAM_ID: 1610612747 },
+  { PERSON_ID: 203076, DISPLAY_FIRST_LAST: "Anthony Davis", TEAM_ABBREVIATION: "DAL", TEAM_ID: 1610612742 },
   { PERSON_ID: 1630559, DISPLAY_FIRST_LAST: "Austin Reaves", TEAM_ABBREVIATION: "LAL", TEAM_ID: 1610612747 },
   { PERSON_ID: 203999, DISPLAY_FIRST_LAST: "Nikola Jokic", TEAM_ABBREVIATION: "DEN", TEAM_ID: 1610612743 },
   { PERSON_ID: 1630533, DISPLAY_FIRST_LAST: "Paolo Banchero", TEAM_ABBREVIATION: "ORL", TEAM_ID: 1610612753 },
   { PERSON_ID: 203507, DISPLAY_FIRST_LAST: "Giannis Antetokounmpo", TEAM_ABBREVIATION: "MIL", TEAM_ID: 1610612749 },
   { PERSON_ID: 1628369, DISPLAY_FIRST_LAST: "Jayson Tatum", TEAM_ABBREVIATION: "BOS", TEAM_ID: 1610612738 },
   { PERSON_ID: 201939, DISPLAY_FIRST_LAST: "Stephen Curry", TEAM_ABBREVIATION: "GSW", TEAM_ID: 1610612744 },
-  { PERSON_ID: 201142, DISPLAY_FIRST_LAST: "Kevin Durant", TEAM_ABBREVIATION: "PHX", TEAM_ID: 1610612756 },
+  { PERSON_ID: 201142, DISPLAY_FIRST_LAST: "Kevin Durant", TEAM_ABBREVIATION: "HOU", TEAM_ID: 1610612745 },
   { PERSON_ID: 1628983, DISPLAY_FIRST_LAST: "Shai Gilgeous-Alexander", TEAM_ABBREVIATION: "OKC", TEAM_ID: 1610612760 },
   { PERSON_ID: 1630162, DISPLAY_FIRST_LAST: "Anthony Edwards", TEAM_ABBREVIATION: "MIN", TEAM_ID: 1610612750 },
   { PERSON_ID: 1629630, DISPLAY_FIRST_LAST: "Ja Morant", TEAM_ABBREVIATION: "MEM", TEAM_ID: 1610612763 },
@@ -155,76 +161,14 @@ let playersCache: any[] = [
   { PERSON_ID: 202695, DISPLAY_FIRST_LAST: "Kawhi Leonard", TEAM_ABBREVIATION: "LAC", TEAM_ID: 1610612746 },
   { PERSON_ID: 203954, DISPLAY_FIRST_LAST: "Joel Embiid", TEAM_ABBREVIATION: "PHI", TEAM_ID: 1610612755 },
   { PERSON_ID: 202331, DISPLAY_FIRST_LAST: "Paul George", TEAM_ABBREVIATION: "PHI", TEAM_ID: 1610612755 },
-  { PERSON_ID: 203081, DISPLAY_FIRST_LAST: "Damian Lillard", TEAM_ABBREVIATION: "MIL", TEAM_ID: 1610612749 },
+  { PERSON_ID: 203081, DISPLAY_FIRST_LAST: "Damian Lillard", TEAM_ABBREVIATION: "POR", TEAM_ID: 1610612757 },
   { PERSON_ID: 1641705, DISPLAY_FIRST_LAST: "Victor Wembanyama", TEAM_ABBREVIATION: "SAS", TEAM_ID: 1610612759 },
   { PERSON_ID: 1626164, DISPLAY_FIRST_LAST: "Devin Booker", TEAM_ABBREVIATION: "PHX", TEAM_ID: 1610612756 },
-  { PERSON_ID: 1628368, DISPLAY_FIRST_LAST: "De'Aaron Fox", TEAM_ABBREVIATION: "SAC", TEAM_ID: 1610612758 },
+  { PERSON_ID: 1628368, DISPLAY_FIRST_LAST: "De'Aaron Fox", TEAM_ABBREVIATION: "SAS", TEAM_ID: 1610612759 },
   { PERSON_ID: 1628973, DISPLAY_FIRST_LAST: "Jalen Brunson", TEAM_ABBREVIATION: "NYK", TEAM_ID: 1610612752 },
-  { PERSON_ID: 202681, DISPLAY_FIRST_LAST: "Kyrie Irving", TEAM_ABBREVIATION: "DAL", TEAM_ID: 1610612742 },
   { PERSON_ID: 1627759, DISPLAY_FIRST_LAST: "Jaylen Brown", TEAM_ABBREVIATION: "BOS", TEAM_ID: 1610612738 },
   { PERSON_ID: 201935, DISPLAY_FIRST_LAST: "James Harden", TEAM_ABBREVIATION: "LAC", TEAM_ID: 1610612746 }
 ];
-
-function generateMockGames(playerId: string) {
-  const games = [];
-  const today = new Date();
-  
-  const basePts = 16.5; // Neutral average
-  const baseReb = 6;
-  const baseAst = 4;
-  
-  for (let i = 0; i < 20; i++) {
-    const gameDate = new Date(today);
-    gameDate.setDate(today.getDate() - (i * 2) - Math.floor(Math.random() * 3)); // Games every 2-4 days
-    
-    const pts = Math.max(0, Math.floor(basePts + (Math.random() * 16 - 8)));
-    const reb = Math.max(0, Math.floor(baseReb + (Math.random() * 8 - 4)));
-    const ast = Math.max(0, Math.floor(baseAst + (Math.random() * 6 - 3)));
-    const stl = Math.floor(Math.random() * 3);
-    const blk = Math.floor(Math.random() * 3);
-    const tov = Math.floor(Math.random() * 5);
-    const fg3m = Math.floor(Math.random() * 5);
-    
-    // Calculate derived stats
-    const pra = pts + reb + ast;
-    const pr = pts + reb;
-    const pa = pts + ast;
-    const ra = reb + ast;
-    
-    let fan = pts + (reb * 1.25) + (ast * 1.5) + (stl * 2) + (blk * 2) - (tov * 0.5) + (fg3m * 0.5);
-    
-    let doubleCategories = 0;
-    if (pts >= 10) doubleCategories++;
-    if (reb >= 10) doubleCategories++;
-    if (ast >= 10) doubleCategories++;
-    if (stl >= 10) doubleCategories++;
-    if (blk >= 10) doubleCategories++;
-    
-    if (doubleCategories >= 2) fan += 1.5;
-    if (doubleCategories >= 3) fan += 3;
-    
-    games.push({
-      GAME_DATE: gameDate.toISOString().split('T')[0],
-      MATCHUP: `TEAM vs. OPP`,
-      MIN: Math.floor(20 + Math.random() * 20),
-      PTS: pts,
-      REB: reb,
-      AST: ast,
-      STL: stl,
-      BLK: blk,
-      TOV: tov,
-      FG3M: fg3m,
-      '3PM': fg3m,
-      PRA: pra,
-      PR: pr,
-      PA: pa,
-      RA: ra,
-      FAN: Number(fan.toFixed(2))
-    });
-  }
-  
-  return games;
-}
 
 let isFetchingPlayers = false;
 
@@ -278,30 +222,63 @@ async function fetchPlayers() {
 }
 
 // Helper to get realistic statistics for players in rosters
-function getStatsWithAverages(personId: number, name: string) {
-  const averages = { 
-    ppg: (12 + (personId % 15)).toFixed(1), 
-    rpg: (4 + (personId % 8)).toFixed(1), 
-    apg: (3 + (personId % 6)).toFixed(1) 
-  };
+// Real per-game season averages for every player, fetched once from stats.nba.com
+let seasonAveragesCache: Record<number, { ppg: number; rpg: number; apg: number; seasonRank: number }> = {};
+let isFetchingAverages = false;
 
-  // Generate some "live" stats if we wanted to (but keeping at 0 for "Season" view in rosters)
+async function fetchSeasonAverages() {
+  if (Object.keys(seasonAveragesCache).length > 0 || isFetchingAverages) return;
+  isFetchingAverages = true;
+  try {
+    const params = new URLSearchParams({
+      College: '', Conference: '', Country: '', DateFrom: '', DateTo: '', Division: '',
+      DraftPick: '', DraftYear: '', GameScope: '', GameSegment: '', Height: '',
+      LastNGames: '0', LeagueID: '00', Location: '', MeasureType: 'Base', Month: '0',
+      OpponentTeamID: '0', Outcome: '', PORound: '0', PaceAdjust: 'N', PerMode: 'PerGame',
+      Period: '0', PlayerExperience: '', PlayerPosition: '', PlusMinus: 'N', Rank: 'N',
+      Season: CURRENT_SEASON, SeasonSegment: '', SeasonType: 'Regular Season',
+      ShotClockRange: '', StarterBench: '', TeamID: '0', VsConference: '', VsDivision: '', Weight: ''
+    });
+    const response = await fetchWithRetry(`https://stats.nba.com/stats/leaguedashplayerstats?${params}`, nbaHeaders);
+    const resultSet = response.data?.resultSets?.[0];
+    if (!resultSet?.rowSet?.length) return;
+
+    const headers: string[] = resultSet.headers;
+    const idIdx = headers.indexOf('PLAYER_ID');
+    const ptsIdx = headers.indexOf('PTS');
+    const rebIdx = headers.indexOf('REB');
+    const astIdx = headers.indexOf('AST');
+
+    const rows = [...resultSet.rowSet].sort((a: any[], b: any[]) => b[ptsIdx] - a[ptsIdx]);
+    const cache: typeof seasonAveragesCache = {};
+    rows.forEach((row: any[], i: number) => {
+      cache[row[idIdx]] = {
+        ppg: Number((row[ptsIdx] || 0).toFixed(1)),
+        rpg: Number((row[rebIdx] || 0).toFixed(1)),
+        apg: Number((row[astIdx] || 0).toFixed(1)),
+        seasonRank: i + 1
+      };
+    });
+    seasonAveragesCache = cache;
+    console.log(`Loaded real season averages for ${rows.length} players`);
+  } catch (e: any) {
+    console.warn(`Could not load season averages: ${e.message}`);
+  } finally {
+    isFetchingAverages = false;
+  }
+}
+
+function getStatsWithAverages(personId: number, name: string) {
+  const real = seasonAveragesCache[personId];
+
   return {
     minutes: "0",
     points: 0,
     reboundsTotal: 0,
     assists: 0,
     plusMinusPoints: 0,
-    seasonAverages: {
-      ppg: Number(averages.ppg),
-      rpg: Number(averages.rpg),
-      apg: Number(averages.apg)
-    },
-    rankings: {
-      day7: Math.floor(Math.random() * 50) + 1,
-      day30: Math.floor(Math.random() * 100) + 1,
-      season: Math.floor(Math.random() * 150) + 1
-    }
+    seasonAverages: real ? { ppg: real.ppg, rpg: real.rpg, apg: real.apg } : undefined,
+    rankings: real ? { season: real.seasonRank } : undefined
   };
 }
 
@@ -471,9 +448,12 @@ async function startServer() {
     
     res.json(resultsWithStats);
     
-    // Trigger background fetch if needed, but don't await it
+    // Trigger background fetches if needed, but don't await them
     if (playersCache.length <= 30 && !isFetchingPlayers) {
       fetchPlayers().catch(console.error);
+    }
+    if (Object.keys(seasonAveragesCache).length === 0) {
+      fetchSeasonAverages().catch(console.error);
     }
   });
 
@@ -583,9 +563,9 @@ async function startServer() {
         attempts++;
         console.warn(`Attempt ${attempts} failed for NBA gamelog:`, error.message);
         if (attempts >= maxAttempts) {
-          // Fallback to mock data if API is blocking us
-          console.warn(`Falling back to mock data for player ${playerId} due to API blocking`);
-          return res.json(generateMockGames(playerId));
+          // No fake data: report unavailability honestly
+          console.warn(`NBA gamelog unavailable for player ${playerId} (API blocked or no data)`);
+          return res.status(503).json({ error: "NBA stats are unavailable right now. Try again later." });
         }
         // Wait before retry
         await new Promise(resolve => setTimeout(resolve, 1000 * attempts));
@@ -631,8 +611,14 @@ async function startServer() {
     }
   });
 
+  // Season availability per sport
+  app.get("/api/season-status", (req, res) => {
+    res.json(getSeasonStatus());
+  });
+
   // 4. Get Live Scoreboard
   app.get("/api/scoreboard", async (req, res) => {
+    if (!getSeasonStatus().NBA.active) return res.json([]);
     try {
       // Use the CDN scoreboard which is more reliable and includes live scores
       const response = await axios.get(
@@ -668,39 +654,10 @@ async function startServer() {
         return !isFinal;
       });
       
-      // 5. Final fallback to mock data for today if nothing found
-      if (games.length === 0) {
-        const todayStr = new Date().toISOString().split('T')[0];
-        const tomorrowStr = new Date(Date.now() + 86400000).toISOString().split('T')[0];
-        console.info(`Using NBA Playoff mock data for ${todayStr}`);
-        games = [
-          {
-            gameId: "0042500153",
-            gameStatusText: "Playoffs · 8:30 PM ET",
-            gameStatus: 1,
-            gameTimeUTC: `${tomorrowStr}T00:30:00Z`,
-            homeTeam: { teamTricode: "OKC", teamId: 1610612760, score: 0 },
-            awayTeam: { teamTricode: "SAS", teamId: 1610612759, score: 0 }
-          }
-        ];
-      }
-
       res.json(games);
     } catch (error: any) {
-      console.warn(`NBA Scoreboard API deferred: ${error.message}. Using mock data.`);
-      const todayStr = new Date().toISOString().split('T')[0];
-      const tomorrowStr = new Date(Date.now() + 86400000).toISOString().split('T')[0];
-      // Return realistic mock data instead of empty array to ensure UI is populated
-      res.json([
-        {
-          gameId: "0042500153",
-          gameStatusText: "8:30 PM ET",
-          gameStatus: 1,
-          gameTimeUTC: `${tomorrowStr}T00:30:00Z`,
-          homeTeam: { teamTricode: "OKC", teamId: 1610612760, score: 0 },
-          awayTeam: { teamTricode: "SAS", teamId: 1610612759, score: 0 }
-        }
-      ]);
+      console.warn(`NBA Scoreboard API unavailable: ${error.message}. Returning no games.`);
+      res.json([]);
     }
   });
 
@@ -1148,12 +1105,6 @@ async function startServer() {
             momentum.push(base + (Math.sin(i) * 5) + (Math.random() * 4 - 2));
           }
           data.game.momentum = momentum;
-          
-          // Add Poll Data
-          if (!pollsStore[gameId]) {
-            pollsStore[gameId] = { over: 45 + Math.floor(Math.random() * 20), under: 35 + Math.floor(Math.random() * 20), winners: [] };
-          }
-          data.game.poll = pollsStore[gameId];
 
           res.json(data);
         } catch (cdnErr: any) {
@@ -1315,7 +1266,6 @@ async function startServer() {
           );
           const gameActions = response.data.game?.actions || [];
           const plays = gameActions.map((action: any) => {
-            const playId = `${gameId}_${action.actionNumber}`;
             return {
               id: action.actionNumber,
               clock: action.clock,
@@ -1325,8 +1275,6 @@ async function startServer() {
               scoreHome: action.scoreHome,
               scoreAway: action.scoreAway,
               timestamp: action.timeActual,
-              reactions: reactionsStore[playId] || {},
-              comments: commentsStore[playId] || [],
               tags: getContextualTags(action.description, action.actionType, action.scoreHome, action.scoreAway)
             };
           }).reverse().slice(0, 50);
@@ -1436,6 +1384,7 @@ async function startServer() {
 
   // 3. MLB Scoreboard
   app.get("/api/mlb/scoreboard", async (req, res) => {
+    if (!getSeasonStatus().MLB.active) return res.json([]);
     try {
       const today = new Date();
       const tmrw = new Date();
@@ -1494,69 +1443,11 @@ async function startServer() {
         });
       });
       
-      // Fallback to MLB mock data for today if API fails or returns no games
-      if (games.length === 0) {
-        const todayStr = new Date().toISOString().split('T')[0];
-        const tomorrowStr = new Date(Date.now() + 86400000).toISOString().split('T')[0];
-        console.info(`Using MLB mock data for ${todayStr}`);
-        games = [
-          {
-            gameId: 746001,
-            gameStatus: 2,
-            gameStatusText: "Bottom 3",
-            gameTimeUTC: `${todayStr}T23:00:00Z`,
-            awayTeam: { teamId: 147, teamTricode: "NYY", score: 2 },
-            homeTeam: { teamId: 111, teamTricode: "BOS", score: 4 }
-          },
-          {
-            gameId: 746002,
-            gameStatus: 2,
-            gameStatusText: "Top 2",
-            gameTimeUTC: `${tomorrowStr}T02:15:00Z`,
-            awayTeam: { teamId: 119, teamTricode: "LAD", score: 1 },
-            homeTeam: { teamId: 137, teamTricode: "SF", score: 0 }
-          }
-        ];
-      }
-
       res.json(games);
     } catch (error) {
-      console.warn("MLB Scoreboard deferred. Using mock fallback.");
-      const todayStr = new Date().toISOString().split('T')[0];
-      res.json([
-        {
-          gameId: 746001,
-          gameStatus: 1,
-          gameStatusText: "7:00 PM ET",
-          gameTimeUTC: `${todayStr}T23:00:00Z`,
-          awayTeam: { teamId: 147, teamTricode: "NYY", score: 0 },
-          homeTeam: { teamId: 111, teamTricode: "BOS", score: 0 }
-        }
-      ]);
+      console.warn("MLB Scoreboard API unavailable. Returning no games.");
+      res.json([]);
     }
-  });
-
-  app.post("/api/social/react", express.json(), (req, res) => {
-    const { playId, emoji } = req.body;
-    if (!reactionsStore[playId]) reactionsStore[playId] = {};
-    reactionsStore[playId][emoji] = (reactionsStore[playId][emoji] || 0) + 1;
-    res.json({ success: true, reactions: reactionsStore[playId] });
-  });
-
-  app.post("/api/social/comment", express.json(), (req, res) => {
-    const { playId, user, text } = req.body;
-    if (!commentsStore[playId]) commentsStore[playId] = [];
-    const comment = { id: Math.random().toString(36).substr(2, 9), user, text, timestamp: new Date().toISOString() };
-    commentsStore[playId].push(comment);
-    res.json({ success: true, comment });
-  });
-
-  app.post("/api/social/vote", express.json(), (req, res) => {
-    const { gameId, choice } = req.body;
-    if (!pollsStore[gameId]) pollsStore[gameId] = { over: 0, under: 0, winners: [] };
-    if (choice === 'over') pollsStore[gameId].over++;
-    else if (choice === 'under') pollsStore[gameId].under++;
-    res.json({ success: true, poll: pollsStore[gameId] });
   });
 
   // -- Feature 5: Injury Impact Score --
@@ -1578,7 +1469,7 @@ async function startServer() {
       `;
 
       const response = await ai.models.generateContent({
-        model: "gemini-1.5-flash",
+        model: "gemini-3-flash-preview",
         contents: [{ parts: [{ text: prompt }] }]
       });
       const text = response.text || "";
@@ -1587,18 +1478,6 @@ async function startServer() {
     } catch (e) {
       res.status(500).json({ error: "Failed to analyze injury impact" });
     }
-  });
-
-  // -- Feature 2: Daily Lock Pick --
-  app.get("/api/daily-lock", (req, res) => {
-    res.json(dailyLock || { 
-      playerName: "LeBron James", 
-      sport: "NBA", 
-      line: "Select Over 25.5 PTS", 
-      reason: "Elite matchup vs bottom-tier defense. High usage in recent games.",
-      lockScore: 92,
-      countdown: "2h 15m" 
-    });
   });
 
   // Feature 3: Line Movement
@@ -1610,18 +1489,6 @@ async function startServer() {
       { line: 26.5, time: "1:00 PM" }
     ];
     res.json(history);
-  });
-
-  // Feature 6: Weekly Recap
-  app.get("/api/weekly-recap", (req, res) => {
-    res.json({
-      grade: "A-",
-      hitRate: 72,
-      netKarma: 1450,
-      bestStreak: 6,
-      bestEdge: 18.5,
-      coachNote: "You've been crushing NBA PTS props this week. Your model is accurately identifying value in mid-range shooters. Watch out for B2B games next week.",
-    });
   });
 
   // ==========================================
@@ -1696,6 +1563,7 @@ async function startServer() {
   });
 
   app.get("/api/soccer/scoreboard", (req, res) => {
+    if (!getSeasonStatus().SOCCER.active) return res.json([]);
     const todayStr = new Date().toISOString().split('T')[0];
     res.json([
       {
@@ -1734,42 +1602,9 @@ async function startServer() {
 
   app.listen(PORT, "0.0.0.0", () => {
     console.log(`Server running on http://localhost:${PORT}`);
-    // Pre-fetch players in background
+    // Pre-fetch players and real season averages in background
     fetchPlayers().catch(console.error);
-
-    // Feature 2: Generate Daily Lock at 9AM (or on start for demo)
-    const generateDailyLock = async () => {
-      console.log("Generating AI Daily Lock...");
-      try {
-        const rawKey = process.env.API_KEY || process.env.GEMINI_API_KEY;
-        const apiKey = rawKey?.trim();
-        if (!apiKey) return;
-
-        const ai = new GoogleGenAI({ apiKey });
-
-        const topPlayers = playersCache.slice(0, 5).map(p => p.DISPLAY_FIRST_LAST).join(", ");
-        const prompt = `Identify the single best bet of the day from these players: ${topPlayers}. 
-        Return JSON: {"playerName": string, "line": string, "reason": string, "lockScore": number, "sport": "NBA", "playerId": number}`;
-
-        const response = await ai.models.generateContent({
-          model: "gemini-1.5-flash",
-          contents: [{ parts: [{ text: prompt }] }]
-        });
-        const text = response.text || "";
-        const jsonMatch = text.match(/\{[\s\S]*\}/);
-        if (jsonMatch) {
-          const parsed = JSON.parse(jsonMatch[0]);
-          // Re-sync with cache to ensure real ID
-          const matchedPlayer = playersCache.find(p => p.DISPLAY_FIRST_LAST.toLowerCase().includes(parsed.playerName.toLowerCase()));
-          if (matchedPlayer) {
-            parsed.playerId = matchedPlayer.PERSON_ID;
-          }
-          dailyLock = parsed;
-        }
-      } catch (e) { console.error("Daily lock cron fail", e); }
-    };
-    generateDailyLock();
-    cron.schedule("0 9 * * *", generateDailyLock);
+    fetchSeasonAverages().catch(console.error);
 
     // Feature 3: Simulate Line Movement every 30 mins
     cron.schedule("*/30 * * * *", () => {

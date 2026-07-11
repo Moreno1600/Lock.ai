@@ -8,17 +8,6 @@ import ReactMarkdown from 'react-markdown';
 import { GoogleGenAI } from "@google/genai";
 import html2canvas from 'html2canvas';
 
-// Firebase
-import { initializeApp } from 'firebase/app';
-import { getAuth, signInWithPopup, GoogleAuthProvider, onAuthStateChanged, User as FirebaseUser } from 'firebase/auth';
-import { getFirestore, collection, addDoc, query, where, getDocs, orderBy, limit, updateDoc, doc, onSnapshot, serverTimestamp, setDoc, getDoc, increment, arrayUnion, arrayRemove } from 'firebase/firestore';
-import firebaseConfig from '../firebase-applet-config.json';
-
-const app = initializeApp(firebaseConfig);
-const db = getFirestore(app, firebaseConfig.firestoreDatabaseId);
-const auth = getAuth(app);
-const googleProvider = new GoogleAuthProvider();
-
 interface Player {
   PERSON_ID: number;
   DISPLAY_FIRST_LAST: string;
@@ -87,7 +76,7 @@ export const getHeadshotUrl = (id: number, sport: Sport = 'NBA') => {
   if (sport === 'SOCCER') {
     return `https://a.espncdn.com/i/headshots/soccer/players/full/${id}.png`;
   }
-  return `https://ak-static.cms.nba.com/wp-content/uploads/headshots/nba/latest/260x190/${id}.png`;
+  return `https://cdn.nba.com/headshots/nba/latest/260x190/${id}.png`;
 };
 
 export const getTeamLogoUrl = (tricode: string, sport: Sport = 'NBA') => {
@@ -274,53 +263,6 @@ const formatToCT = (utcString: string, statusText: string, status: number) => {
   }
 };
 
-enum OperationType {
-  CREATE = 'create',
-  UPDATE = 'update',
-  DELETE = 'delete',
-  LIST = 'list',
-  GET = 'get',
-  WRITE = 'write',
-}
-
-interface FirestoreErrorInfo {
-  error: string;
-  operationType: OperationType;
-  path: string | null;
-  authInfo: {
-    userId?: string | null;
-    email?: string | null;
-    emailVerified?: boolean | null;
-    isAnonymous?: boolean | null;
-    tenantId?: string | null;
-    providerInfo?: {
-      providerId?: string | null;
-      email?: string | null;
-    }[];
-  }
-}
-
-function handleFirestoreError(error: unknown, operationType: OperationType, path: string | null) {
-  const errInfo: FirestoreErrorInfo = {
-    error: error instanceof Error ? error.message : String(error),
-    authInfo: {
-      userId: auth.currentUser?.uid,
-      email: auth.currentUser?.email,
-      emailVerified: auth.currentUser?.emailVerified,
-      isAnonymous: auth.currentUser?.isAnonymous,
-      tenantId: auth.currentUser?.tenantId,
-      providerInfo: auth.currentUser?.providerData?.map(provider => ({
-        providerId: provider.providerId,
-        email: provider.email,
-      })) || []
-    },
-    operationType,
-    path
-  }
-  console.error('Firestore Error: ', JSON.stringify(errInfo));
-  throw new Error(JSON.stringify(errInfo));
-}
-
 export default function App() {
   const [sport, setSport] = useState<Sport>('NBA');
   const [searchQuery, setSearchQuery] = useState('');
@@ -343,101 +285,32 @@ export default function App() {
   }, [sport]);
   
   const [targetLine, setTargetLine] = useState<string>('');
-  const [favorites, setFavorites] = useState<FavoriteProp[]>([]);
-  const [activeTab, setActiveTab] = useState<'home' | 'favorites' | 'optimizer' | 'social' | 'squads' | 'recaps' | 'import' | 'tos'>('home');
-  const [currentUser, setCurrentUser] = useState<FirebaseUser | null>(null);
-  const [userProfile, setUserProfile] = useState<any>(null);
-  
-  // Feature 1 - Social Picks
-  const [publicPicks, setPublicPicks] = useState<any[]>([]);
-  
-  // Feature 2 - Daily Lock
-  const [dailyLockData, setDailyLockData] = useState<any>(null);
-  
-  // Feature 3 - Line Movement
-  const [lineHistory, setLineHistory] = useState<any[]>([]);
-  
-  // Feature 4 - Squads
-  const [mySquad, setMySquad] = useState<any>({
-    name: "VIP Sharp Squad",
-    memberCount: 5,
-    inviteCode: "SHARP99"
+  const [favorites, setFavorites] = useState<FavoriteProp[]>(() => {
+    try {
+      return JSON.parse(localStorage.getItem('lockai-favorites') || '[]');
+    } catch {
+      return [];
+    }
   });
-  const [squadPicks, setSquadPicks] = useState<any[]>([
-    { id: 1, user: "AlexB", playerName: "Nikola Jokic", line: "Over 26.5 PTS", score: 92, timestamp: "10m ago", playerId: 203999 },
-    { id: 2, user: "SarahProp", playerName: "Shohei Ohtani", line: "Over 1.5 TB", score: 88, timestamp: "25m ago", playerId: 660271 }
-  ]);
-  const [squadMessages, setSquadMessages] = useState<any[]>([
-    { id: 1, user: "AlexB", text: "Jokic logic is too strong tonight. 🚀", time: "10:15 AM" },
-    { id: 2, user: "SarahProp", text: "Ohtani line just moved, jump on it now!!", time: "10:30 AM" },
-    { id: 3, user: "Mike99", text: "Tail of the century.", time: "10:45 AM" }
-  ]);
-  
-  // Feature 5 - Injury Impact
+
+  useEffect(() => {
+    localStorage.setItem('lockai-favorites', JSON.stringify(favorites));
+  }, [favorites]);
+  const [activeTab, setActiveTab] = useState<'home' | 'favorites' | 'optimizer' | 'import' | 'tos'>('home');
+
+  // Season availability — off-season sports show an unavailable notice instead of fake data
+  const [seasonStatus, setSeasonStatus] = useState<Record<string, { active: boolean; resumes: string }> | null>(null);
+
+  useEffect(() => {
+    axios.get('/api/season-status').then(res => setSeasonStatus(res.data)).catch(() => {});
+  }, []);
+
+  // Line Movement
+  const [lineHistory, setLineHistory] = useState<any[]>([]);
+
+  // Injury Impact
   const [injuryImpact, setInjuryImpact] = useState<any>(null);
   const [isAnalyzingInjury, setIsAnalyzingInjury] = useState(false);
-
-  // Feature 6 - Weekly Recap
-  const [showRecap, setShowRecap] = useState(false);
-  const [weeklyRecap, setWeeklyRecap] = useState<any>(null);
-
-  // Initial Data Fetch
-  useEffect(() => {
-    axios.get('/api/daily-lock').then(res => setDailyLockData(res.data)).catch(() => {});
-    axios.get('/api/weekly-recap').then(res => setWeeklyRecap(res.data)).catch(() => {});
-  }, []);
-
-  // Fetch Public Picks with real-time sync
-  useEffect(() => {
-    const q = query(
-      collection(db, 'picks'), 
-      where('type', '==', 'public'), 
-      orderBy('createdAt', 'desc'), 
-      limit(25)
-    );
-    
-    const unsub = onSnapshot(q, (snap) => {
-      setPublicPicks(snap.docs.map(d => ({ id: d.id, ...d.data() })));
-    }, (error) => {
-      handleFirestoreError(error, OperationType.LIST, 'picks');
-    });
-    
-    return () => unsub();
-  }, []);
-
-  // Auth Effect
-  useEffect(() => {
-    const unsub = onAuthStateChanged(auth, async (user) => {
-      setCurrentUser(user);
-      if (user) {
-        // Sync Profile
-        const userRef = doc(db, 'users', user.uid);
-        const snap = await getDoc(userRef);
-        if (snap.exists()) {
-          setUserProfile(snap.data());
-        } else {
-          const newProfile = {
-            uid: user.uid,
-            username: user.displayName || 'Sharp',
-            karmaScore: 100,
-            record: { wins: 0, losses: 0 },
-            bestStreak: 0,
-            createdAt: new Date().toISOString()
-          };
-          await setDoc(userRef, newProfile);
-          setUserProfile(newProfile);
-        }
-      } else {
-        setUserProfile(null);
-      }
-    });
-    return () => unsub();
-  }, []);
-
-  // Fetch Daily Lock
-  useEffect(() => {
-    axios.get('/api/daily-lock').then(res => setDailyLockData(res.data)).catch(e => console.error(e));
-  }, []);
 
   
   const [analysis, setAnalysis] = useState<string | null>(null);
@@ -634,7 +507,7 @@ export default function App() {
       `;
 
       const response = await ai.models.generateContent({
-        model: "gemini-1.5-flash",
+        model: "gemini-3-flash-preview",
         contents: [{ parts: [{ text: prompt }] }],
       });
       
@@ -714,44 +587,6 @@ export default function App() {
     }
   };
 
-  const handleTailPick = async (pickId: string) => {
-    try {
-      const pickRef = doc(db, 'picks', pickId);
-      await updateDoc(pickRef, { tails: increment(1) });
-    } catch (e) { console.error(e); }
-  };
-
-  const handleFadePick = async (pickId: string) => {
-    try {
-      const pickRef = doc(db, 'picks', pickId);
-      await updateDoc(pickRef, { fades: increment(1) });
-    } catch (e) { console.error(e); }
-  };
-
-  const handlePublishPick = async (fav: FavoriteProp) => {
-    if (!currentUser) {
-      signInWithPopup(auth, googleProvider);
-      return;
-    }
-    try {
-      await addDoc(collection(db, 'picks'), {
-        type: 'public',
-        creator: currentUser.displayName,
-        creatorId: currentUser.uid,
-        userRecord: `${userProfile?.record?.wins || 0}W-${userProfile?.record?.losses || 0}L`,
-        playerId: fav.player.PERSON_ID,
-        playerName: fav.player.DISPLAY_FIRST_LAST,
-        line: `${fav.statCategory} ${fav.targetLine}`,
-        lockScore: Math.round(fav.hitRate),
-        sport: fav.sport,
-        tails: 0,
-        fades: 0,
-        createdAt: serverTimestamp()
-      });
-      alert('Pick published to community feed! 🚀');
-    } catch (e) { console.error(e); }
-  };
-
   const handleFetchLineTracker = (playerId: number) => {
     axios.get(`/api/line-movement/${playerId}`).then(res => setLineHistory(res.data)).catch(() => {});
   };
@@ -770,13 +605,6 @@ export default function App() {
       }
     }
   }, [selectedPlayer, status]);
-
-  const handleVote = async (choice: 'over' | 'under') => {
-    if (!selectedGameId) return;
-    try {
-      await axios.post('/api/social/vote', { gameId: selectedGameId, choice });
-    } catch (e) { console.error(e); }
-  };
 
   const chartData = [...recentGames].reverse().map(g => ({
     date: g.GAME_DATE.split(' ')[0],
@@ -826,25 +654,7 @@ export default function App() {
             onClick={() => setActiveTab('optimizer')} 
             label="Optimizer"
           />
-          <SidebarIcon 
-            icon={Globe} 
-            active={activeTab === 'social'} 
-            onClick={() => setActiveTab('social')} 
-            label="Community"
-          />
-          <SidebarIcon 
-            icon={Users} 
-            active={activeTab === 'squads'} 
-            onClick={() => setActiveTab('squads')} 
-            label="Squads"
-          />
-          <SidebarIcon 
-            icon={Trophy} 
-            active={activeTab === 'recaps'} 
-            onClick={() => setActiveTab('recaps')} 
-            label="Recaps"
-          />
-          <SidebarIcon 
+          <SidebarIcon
             icon={Bookmark} 
             active={activeTab === 'favorites'} 
             onClick={() => setActiveTab('favorites')} 
@@ -990,21 +800,6 @@ export default function App() {
                 )}
               </button>
 
-              {currentUser ? (
-                <div className="flex items-center gap-2 px-3 py-1 bg-zinc-900 border border-zinc-800 rounded-full">
-                  <div className="w-6 h-6 rounded-full overflow-hidden border border-zinc-700">
-                    <img src={currentUser.photoURL || `https://ui-avatars.com/api/?name=${encodeURIComponent(currentUser.displayName || 'u')}`} className="w-full h-full" />
-                  </div>
-                  <span className="text-[10px] font-black text-zinc-100 hidden sm:block uppercase tracking-widest">{userProfile?.karmaScore || 0} KP</span>
-                </div>
-              ) : (
-                <button 
-                  onClick={() => signInWithPopup(auth, googleProvider)}
-                  className="flex items-center gap-2 px-4 py-2 bg-emerald-500 text-zinc-950 rounded-full text-xs font-black uppercase hover:bg-emerald-400 transition-all active:scale-95"
-                >
-                  <User className="w-4 h-4" /> Login
-                </button>
-              )}
               <div className="hidden md:flex items-center gap-2 px-3 py-1.5 bg-emerald-500/5 border border-emerald-500/10 rounded-full">
                 <div className="w-1.5 h-1.5 bg-emerald-500 rounded-full animate-pulse" />
                 <span className="text-[10px] font-bold tracking-widest text-emerald-500 uppercase">Lock.Ai Feed</span>
@@ -1068,15 +863,9 @@ export default function App() {
             )}
 
             {activeTab === 'favorites' ? (
-              <FavoritesView favorites={favorites} setFavorites={setFavorites} sport={sport} onPublish={handlePublishPick} />
+              <FavoritesView favorites={favorites} setFavorites={setFavorites} sport={sport} />
             ) : activeTab === 'optimizer' ? (
               <OptimizerView favorites={favorites} setActiveTab={setActiveTab} sport={sport} />
-            ) : activeTab === 'social' ? (
-              <SocialView picks={publicPicks} onTail={handleTailPick} onFade={handleFadePick} />
-            ) : activeTab === 'squads' ? (
-              <SquadsView squad={mySquad} picks={squadPicks} messages={squadMessages} />
-            ) : activeTab === 'recaps' ? (
-              <RecapsView recap={weeklyRecap} />
             ) : activeTab === 'import' ? (
               <ScreenshotImporter onPlayerSelect={handleSelectPlayer} setActiveTab={setActiveTab} sport={sport} />
             ) : activeTab === 'tos' ? (
@@ -1186,13 +975,6 @@ export default function App() {
                     */}
                   </div>
 
-                    {/* Daily Lock Section */}
-                    {dailyLockData && (
-                      <div className="w-full max-w-5xl px-4 pt-4">
-                        <DailyLockCard data={dailyLockData} />
-                      </div>
-                    )}
-
                     {/* How it Works Section */}
                   <div className="pt-12 grid grid-cols-1 md:grid-cols-3 gap-6 px-4">
                     {[
@@ -1235,9 +1017,27 @@ export default function App() {
                           ))}
                         </div>
                        </div>
-                       <KarmaLeaderboard />
                     </div>
 
+                    {/* Off-season notice: no live data, no fake filler */}
+                    {seasonStatus && !seasonStatus[sport]?.active ? (
+                      <div className="w-full max-w-5xl px-4 pt-12 mx-auto">
+                        <div className="bg-zinc-900/40 border border-zinc-800/60 rounded-3xl p-10 flex flex-col items-center text-center space-y-4">
+                          <div className="w-16 h-16 bg-zinc-800/50 rounded-2xl flex items-center justify-center border border-zinc-700/50">
+                            <Calendar className="w-8 h-8 text-zinc-500" />
+                          </div>
+                          <div className="px-3 py-1 bg-red-500/10 border border-red-500/20 rounded-full text-[10px] font-black text-red-400 uppercase tracking-widest">
+                            Off-Season
+                          </div>
+                          <h3 className="text-2xl font-black text-zinc-100 uppercase tracking-tight">{sport} is unavailable right now</h3>
+                          <p className="text-sm text-zinc-500 max-w-md leading-relaxed">
+                            The {sport} season is over, so there are no live games, lines, or trending props to show.
+                            Live data returns {seasonStatus[sport]?.resumes}. You can still search any player to review last season's stats.
+                          </p>
+                        </div>
+                      </div>
+                    ) : (
+                    <>
                     {/* Live Games Section */}
                     {(() => {
                       const filtered = liveGames.filter(g => {
@@ -1245,7 +1045,7 @@ export default function App() {
                         const statusText = (g.gameStatusText || "").toLowerCase();
                         return status !== 3 && !statusText.includes('final') && !statusText.includes('ended');
                       });
-                      
+
                       if (filtered.length === 0) return null;
 
                       return (
@@ -1348,6 +1148,9 @@ export default function App() {
                     <div className="flex items-center gap-3">
                       <div className="w-1.5 h-5 bg-emerald-500 rounded-full" />
                       <h3 className="text-sm font-black uppercase tracking-[0.2em] text-zinc-400">MARKET VS. AI: THE EDGE</h3>
+                      <span className="px-2 py-0.5 bg-yellow-500/10 border border-yellow-500/20 rounded text-[9px] font-black text-yellow-500 uppercase tracking-widest">
+                        Sample Data
+                      </span>
                     </div>
 
                     <div className="bg-zinc-900/40 border border-zinc-800/60 rounded-[2rem] overflow-x-auto custom-scrollbar">
@@ -1497,6 +1300,8 @@ export default function App() {
                       ))}
                     </div>
                   </div>
+                    </>
+                    )}
                 </div>
               )}
 
@@ -2165,16 +1970,6 @@ function GameCenter({ gameId, onClose, sport, onSelectPlayer }: { gameId: string
 
           {activeTab === 'roster' && (
             <div className="space-y-8">
-              {boxscore?.gameStatus === 1 && (
-                <PregamePoll 
-                  gameId={gameId} 
-                  poll={boxscore.poll} 
-                  onVote={async (choice) => {
-                    await axios.post('/api/social/vote', { gameId, choice });
-                    fetchGameData();
-                  }} 
-                />
-              )}
               <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
                 <TeamRoster team={awayTeam} name={awayTeam?.teamName} sport={sport} onSelectPlayer={onSelectPlayer} />
                 <TeamRoster team={homeTeam} name={homeTeam?.teamName} sport={sport} onSelectPlayer={onSelectPlayer} />
@@ -2299,50 +2094,6 @@ function MomentumGraph({ data }: { data: number[] }) {
   );
 }
 
-function PregamePoll({ gameId, poll, onVote }: { gameId: string, poll: any, onVote: (choice: 'over' | 'under') => void }) {
-  const total = (poll?.over || 0) + (poll?.under || 0);
-  const overPct = total ? Math.round((poll.over / total) * 100) : 50;
-  
-  return (
-    <div className="bg-zinc-900 border border-zinc-800 rounded-3xl p-6 space-y-4">
-      <div className="flex items-center justify-between">
-        <h3 className="text-sm font-black text-zinc-100 uppercase tracking-widest flex items-center gap-2">
-          <TrendingUp className="w-4 h-4 text-emerald-500" />
-          Community Projection
-        </h3>
-        <span className="text-[10px] font-bold text-zinc-500">{total} votes</span>
-      </div>
-      
-      <div className="space-y-3">
-        <div className="relative h-12 bg-zinc-950 rounded-2xl border border-zinc-800 overflow-hidden flex">
-          <button 
-            onClick={() => onVote('over')}
-            className="flex-1 flex flex-col items-center justify-center relative z-10 hover:bg-emerald-500/10 transition-colors"
-          >
-            <span className="text-xs font-black text-zinc-100">OVER</span>
-            <span className="text-[9px] text-zinc-500">{overPct}%</span>
-          </button>
-          <div className="w-px h-full bg-zinc-800 relative z-10" />
-          <button 
-            onClick={() => onVote('under')}
-            className="flex-1 flex flex-col items-center justify-center relative z-10 hover:bg-emerald-500/10 transition-colors"
-          >
-            <span className="text-xs font-black text-zinc-100">UNDER</span>
-            <span className="text-[9px] text-zinc-500">{100 - overPct}%</span>
-          </button>
-          
-          {/* Progress fill */}
-          <motion.div 
-            initial={{ width: '50%' }}
-            animate={{ width: `${overPct}%` }}
-            className="absolute left-0 top-0 bottom-0 bg-emerald-500/5" 
-          />
-        </div>
-      </div>
-    </div>
-  );
-}
-
 function MiniMomentum({ data }: { data: number[] }) {
   if (!data) return null;
   const chartData = data.map((val, i) => ({ i, val }));
@@ -2357,62 +2108,7 @@ function MiniMomentum({ data }: { data: number[] }) {
   );
 }
 
-function KarmaLeaderboard() {
-  const leaders = [
-    { name: 'Sharpshooter99', points: 1240, karma: 'Legend' },
-    { name: 'PropMaster', points: 1120, karma: 'Expert' },
-    { name: 'ParlayPrince', points: 980, karma: 'Pro' }
-  ];
-  return (
-    <div className="bg-zinc-900 border border-zinc-800 rounded-3xl p-6 space-y-4">
-      <div className="flex items-center justify-between">
-        <h3 className="text-sm font-black text-zinc-100 uppercase tracking-widest flex items-center gap-2">
-          <ShieldCheck className="w-4 h-4 text-emerald-500" />
-          Social Karma
-        </h3>
-        <span className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest">Global Rank</span>
-      </div>
-      <div className="space-y-2">
-        {leaders.map((l, i) => (
-          <div key={l.name} className="flex items-center justify-between p-3 bg-zinc-950 border border-zinc-900 rounded-xl">
-             <div className="flex items-center gap-3">
-               <span className="text-xs font-black text-zinc-700">#0{i+1}</span>
-               <div>
-                  <div className="text-xs font-bold text-zinc-100">{l.name}</div>
-                  <div className="text-[8px] font-black text-emerald-500 uppercase tracking-widest">{l.karma}</div>
-               </div>
-             </div>
-             <div className="text-right">
-                <div className="text-xs font-black text-zinc-100">{l.points}</div>
-                <div className="text-[8px] font-bold text-zinc-600 uppercase tracking-widest">Points</div>
-             </div>
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-}
-
 function LightningFeed({ plays, gameId, sport }: { plays: any[], gameId: string, sport: Sport }) {
-  const [commentingId, setCommentingId] = useState<string | null>(null);
-  const [commentText, setCommentText] = useState('');
-
-  const handleReact = async (playId: number | string, emoji: string) => {
-    try {
-      await axios.post('/api/social/react', { playId: `${gameId}_${playId}`, emoji });
-      // In a real app we'd trigger a re-fetch or use optimistic updates
-    } catch (e) { console.error(e); }
-  };
-
-  const handleComment = async (playId: number | string) => {
-    if (!commentText.trim()) return;
-    try {
-      await axios.post('/api/social/comment', { playId: `${gameId}_${playId}`, user: 'You', text: commentText });
-      setCommentText('');
-      setCommentingId(null);
-    } catch (e) { console.error(e); }
-  };
-
   if (plays.length === 0) {
     return (
       <div className="flex flex-col items-center justify-center py-20 text-center space-y-4">
@@ -2500,67 +2196,6 @@ function LightningFeed({ plays, gameId, sport }: { plays: any[], gameId: string,
                      </div>
                    )}
 
-                   {/* Reactions and Feedback */}
-                   <div className="mt-4 pt-4 border-t border-zinc-800/50 flex flex-wrap items-center justify-between gap-4">
-                     <div className="flex items-center gap-2">
-                       {['🔥', '😲', '💎', '🎯'].map(emoji => (
-                         <button 
-                           key={emoji}
-                           onClick={() => handleReact(play.id, emoji)}
-                           className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-zinc-950 border border-zinc-800 text-xs hover:border-emerald-500/50 transition-all active:scale-95"
-                         >
-                           <span>{emoji}</span>
-                           <span className="text-[10px] font-black text-zinc-500">{(play.reactions?.[emoji] || 0)}</span>
-                         </button>
-                       ))}
-                     </div>
-      <button 
-        onClick={() => setCommentingId(commentingId === play.id ? null : play.id)}
-        className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-zinc-950 border border-zinc-800 text-[10px] font-black text-zinc-400 uppercase tracking-widest hover:text-emerald-400 hover:border-emerald-500/30 transition-all"
-      >
-       <MessageSquare className="w-3.5 h-3.5" />
-       {play.comments?.length || 0}
-     </button>
-                   </div>
-
-                   {/* Comment Input Panel */}
-                   <AnimatePresence>
-                     {commentingId === play.id && (
-                       <motion.div 
-                         initial={{ height: 0, opacity: 0 }}
-                         animate={{ height: 'auto', opacity: 1 }}
-                         exit={{ height: 0, opacity: 0 }}
-                         className="overflow-hidden mt-4 space-y-3"
-                       >
-                         <div className="space-y-2 max-h-32 overflow-y-auto custom-scrollbar pr-2">
-                           {play.comments?.map((c: any) => (
-                             <div key={c.id} className="bg-zinc-950/50 p-3 rounded-2xl border border-zinc-800/50">
-                               <div className="flex items-center justify-between mb-1">
-                                 <span className="text-[10px] font-black text-emerald-500 uppercase">{c.user}</span>
-                                 <span className="text-[9px] text-zinc-600">{new Date(c.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
-                               </div>
-                               <p className="text-xs text-zinc-400">{c.text}</p>
-                             </div>
-                           ))}
-                         </div>
-                         <div className="flex gap-2">
-                           <input 
-                             type="text" 
-                             value={commentText}
-                             onChange={(e) => setCommentText(e.target.value)}
-                             placeholder="Drop your reaction..." 
-                             className="flex-1 bg-zinc-950 border border-zinc-800 rounded-xl px-4 py-2 text-xs focus:outline-none focus:border-emerald-500/50"
-                           />
-                           <button 
-                             onClick={() => handleComment(play.id)}
-                             className="p-2 bg-emerald-500 text-zinc-950 rounded-xl hover:bg-emerald-400 active:scale-95 transition-all"
-                           >
-                             <CheckCircle className="w-4 h-4" />
-                           </button>
-                         </div>
-                       </motion.div>
-                     )}
-                   </AnimatePresence>
                 </div>
               </div>
             </div>
@@ -2829,139 +2464,6 @@ function SidebarIcon({ icon: Icon, active, onClick, label, badge }: { icon: any,
   );
 }
 
-function DailyLockCard({ data }: { data: any }) {
-  if (!data) return null;
-  return (
-    <div className="relative group overflow-hidden rounded-3xl border border-emerald-500/30 bg-zinc-900/40 backdrop-blur-xl p-6 md:p-8">
-      <div className="absolute top-0 right-0 p-4">
-        <div className="flex items-center gap-2 px-3 py-1 bg-emerald-500 text-zinc-950 rounded-full text-[10px] font-black uppercase tracking-widest shadow-[0_0_15px_rgba(16,185,129,0.4)]">
-          <Sparkles className="w-3 h-3" /> Lock of the Day
-        </div>
-      </div>
-      
-      <div className="flex flex-col md:flex-row gap-8 items-center relative z-10">
-        <div className="shrink-0 relative">
-          <div className="absolute inset-0 bg-emerald-500/30 blur-[40px] rounded-full scale-110 opacity-60 group-hover:opacity-100 transition-opacity" />
-          {data.playerId ? (
-            <div className="relative">
-              <img 
-                src={getHeadshotUrl(data.playerId, data.sport)!} 
-                alt={data.playerName}
-                className="w-32 h-32 md:w-48 md:h-48 object-contain rounded-3xl border-2 border-emerald-500/20 relative z-10 bg-zinc-950/40 backdrop-blur-md shadow-2xl transition-transform duration-500 group-hover:scale-105"
-                referrerPolicy="no-referrer"
-                onError={(e) => (e.target as any).src = `https://ui-avatars.com/api/?name=${encodeURIComponent(data.playerName)}&background=10b981&color=fff`}
-              />
-              <div className="absolute -bottom-2 -right-2 bg-emerald-500 text-zinc-950 w-8 h-8 rounded-full flex items-center justify-center border-4 border-zinc-950 z-20 shadow-lg">
-                <Sparkles className="w-4 h-4" />
-              </div>
-            </div>
-          ) : (
-            <div className="relative">
-              <img 
-                src={`https://ui-avatars.com/api/?name=${encodeURIComponent(data.playerName)}&background=10b981&color=fff`} 
-                alt={data.playerName}
-                className="w-32 h-32 md:w-48 md:h-48 object-cover rounded-3xl border-2 border-emerald-500/20 relative z-10 shadow-2xl"
-              />
-            </div>
-          )}
-        </div>
-        
-        <div className="flex-1 space-y-4 text-center md:text-left">
-          <div>
-            <h3 className="text-3xl md:text-5xl font-black text-zinc-100 tracking-tighter uppercase">{data.playerName}</h3>
-            <p className="text-emerald-500 font-mono text-lg font-black">{data.line}</p>
-          </div>
-          
-          <div className="p-4 bg-zinc-950/50 rounded-2xl border border-zinc-800 font-medium text-sm text-zinc-400 leading-relaxed max-w-xl text-left">
-            {data.reason}
-          </div>
-          
-          <div className="flex flex-wrap items-center justify-center md:justify-start gap-4">
-            <div className="flex flex-col">
-              <span className="text-2xl font-black text-emerald-400">{data.lockScore}%</span>
-              <span className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest">Confidence</span>
-            </div>
-            <div className="w-px h-8 bg-zinc-800" />
-            <div className="flex flex-col">
-              <span className="text-2xl font-black text-zinc-100 flex items-center gap-2">
-                <Clock className="w-5 h-5 text-emerald-500" />
-                {data.countdown || '2h 15m'}
-              </span>
-              <span className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest">Starts In</span>
-            </div>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function PublicPickCard({ pick, onTail, onFade }: { pick: any, onTail: (id: string) => void, onFade: (id: string) => void }) {
-  const tailPct = Math.round((pick.tails / (pick.tails + pick.fades || 1)) * 100);
-  
-  return (
-    <div className="bg-zinc-900/50 border border-zinc-800 rounded-3xl p-6 space-y-5 hover:border-emerald-500/30 transition-all group overflow-hidden relative">
-      <div className="flex items-center justify-between relative z-10">
-        <div className="flex items-center gap-3">
-          <div className="w-10 h-10 rounded-full bg-zinc-800 p-0.5 border border-zinc-700">
-            <img src={`https://ui-avatars.com/api/?name=${encodeURIComponent(pick.creator || 'User')}&background=18181b&color=10b981`} className="w-full h-full rounded-full" />
-          </div>
-          <div>
-            <div className="text-sm font-bold text-zinc-100 flex items-center gap-1.5">
-              {pick.creator || 'Sharp Better'}
-              <ShieldCheck className="w-3.5 h-3.5 text-emerald-500" />
-            </div>
-            <div className="text-[10px] font-black text-zinc-500 uppercase tracking-widest">
-              Record: <span className="text-emerald-500">{pick.userRecord || '0-0'}</span>
-            </div>
-          </div>
-        </div>
-        <button onClick={() => {}} className="p-2 text-zinc-500 hover:text-emerald-500 transition-colors">
-          <Share2 className="w-4 h-4" />
-        </button>
-      </div>
-
-      <div className="bg-zinc-950 p-4 rounded-2xl border border-zinc-800/50 space-y-3 relative z-10">
-        <div className="flex items-center justify-between">
-          <span className="text-[10px] font-black text-zinc-500 uppercase tracking-widest">{pick.sport} PROP</span>
-          <span className="text-xs font-black text-emerald-500">{pick.lockScore} LOCK SCORE</span>
-        </div>
-        <div className="flex items-center gap-4">
-          <img src={getHeadshotUrl(pick.playerId, pick.sport)!} className="w-12 h-12 rounded-xl bg-zinc-900 border border-zinc-800" referrerPolicy="no-referrer" onError={(e) => (e.target as any).src = "https://ui-avatars.com/api/?name=P"} />
-          <div>
-            <div className="text-lg font-black text-zinc-100 tracking-tight">{pick.playerName}</div>
-            <div className="text-sm font-bold text-emerald-500">{pick.line}</div>
-          </div>
-        </div>
-      </div>
-
-      <div className="space-y-3 relative z-10">
-        <div className="flex items-center justify-between text-[10px] font-black uppercase tracking-widest">
-          <span className="text-emerald-500">{tailPct}% Tailing</span>
-          <span className="text-zinc-500">{100 - tailPct}% Fading</span>
-        </div>
-        <div className="h-1.5 bg-zinc-800 rounded-full overflow-hidden flex">
-          <div className="h-full bg-emerald-500" style={{ width: `${tailPct}%` }} />
-        </div>
-        <div className="flex gap-2">
-          <button 
-            onClick={() => onTail(pick.id)}
-            className="flex-1 flex items-center justify-center gap-2 py-3 bg-emerald-500/10 border border-emerald-500/20 text-emerald-500 rounded-xl text-xs font-black uppercase hover:bg-emerald-500 hover:text-zinc-950 transition-all active:scale-95"
-          >
-            <Flame className="w-4 h-4" /> Tail ({pick.tails || 0})
-          </button>
-          <button 
-            onClick={() => onFade(pick.id)}
-            className="flex-1 flex items-center justify-center gap-2 py-3 bg-zinc-800/50 border border-zinc-800 text-zinc-400 rounded-xl text-xs font-black uppercase hover:bg-zinc-700 transition-all active:scale-95"
-          >
-            <AlertTriangle className="w-4 h-4" /> Fade ({pick.fades || 0})
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
 function LineMovementTracker({ playerId }: { playerId: string }) {
   const [data, setData] = useState<any[]>([]);
   useEffect(() => {
@@ -3036,222 +2538,6 @@ function InjuryRipple({ impact }: { impact: any }) {
 }
 
 
-function SocialView({ picks, onTail, onFade }: { picks: any[], onTail: (id: string) => void, onFade: (id: string) => void }) {
-  return (
-    <div className="space-y-8 animate-in fade-in duration-500">
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-zinc-800 pb-8">
-        <div>
-          <h2 className="text-3xl font-black text-zinc-100 uppercase tracking-tighter">Community Picks</h2>
-          <p className="text-zinc-500 text-sm font-medium">Tail the sharps or fade the public. Earn Karma points for accuracy.</p>
-        </div>
-        <div className="flex bg-zinc-900 rounded-xl p-1 border border-zinc-800 self-start md:self-auto">
-          <button className="px-4 py-2 bg-emerald-500 text-zinc-950 text-[10px] font-black uppercase rounded-lg">Trending</button>
-          <button className="px-4 py-2 text-zinc-500 text-[10px] font-black uppercase hover:text-zinc-300">Newest</button>
-        </div>
-      </div>
-      
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-        {picks.length === 0 ? (
-          <div className="col-span-full py-20 text-center space-y-4">
-             <Activity className="w-12 h-12 text-zinc-800 mx-auto animate-pulse" />
-             <div className="text-zinc-600 font-mono text-xs uppercase tracking-widest">No public picks yet...</div>
-          </div>
-        ) : (
-          picks.map(pick => (
-            <PublicPickCard key={pick.id} pick={pick} onTail={onTail} onFade={onFade} />
-          ))
-        )}
-      </div>
-    </div>
-  );
-}
-
-function SquadsView({ squad, picks, messages }: { squad: any, picks: any[], messages: any[] }) {
-  if (!squad) {
-    return (
-      <div className="flex flex-col items-center justify-center p-12 bg-zinc-900/40 border border-zinc-800 rounded-3xl space-y-6 text-center animate-in fade-in duration-500">
-        <div className="w-20 h-20 bg-emerald-500/10 rounded-full flex items-center justify-center border border-emerald-500/20">
-          <Users className="w-10 h-10 text-emerald-500" />
-        </div>
-        <div className="space-y-2">
-          <h2 className="text-2xl font-black text-zinc-100 uppercase tracking-tight">Private Bet Squads</h2>
-          <p className="text-zinc-500 max-w-md mx-auto text-sm leading-relaxed">
-            Create a private squad with your friends. Compete for the weekly championship, 
-            share secret picks, and trash talk in real-time.
-          </p>
-        </div>
-        <div className="flex gap-4">
-          <button className="px-8 py-3 bg-emerald-500 text-zinc-950 rounded-xl text-xs font-black uppercase hover:shadow-[0_0_20px_rgba(16,185,129,0.4)] transition-all">
-            Create Squad
-          </button>
-          <button className="px-8 py-3 bg-zinc-800 text-zinc-100 rounded-xl text-xs font-black uppercase border border-zinc-700 hover:bg-zinc-700 transition-all">
-            Join Squad
-          </button>
-        </div>
-      </div>
-    );
-  }
-
-  return (
-    <div className="grid grid-cols-1 lg:grid-cols-3 gap-8 animate-in fade-in duration-500">
-      <div className="lg:col-span-2 space-y-6">
-        <div className="bg-emerald-500/5 border border-emerald-500/20 rounded-3xl p-6 flex items-center justify-between">
-           <div className="flex items-center gap-4">
-             <div className="w-16 h-16 bg-emerald-500 text-zinc-950 font-black text-2xl flex items-center justify-center rounded-2xl shadow-lg">
-                {squad.name[0]}
-             </div>
-             <div>
-               <h2 className="text-2xl font-black text-zinc-100 tracking-tight">{squad.name}</h2>
-               <div className="flex items-center gap-2 text-[10px] font-bold text-zinc-500 uppercase tracking-widest">
-                 <span className="text-emerald-500">{squad.memberCount} Members</span>
-                 <span>•</span>
-                 <span>Code: {squad.inviteCode}</span>
-               </div>
-             </div>
-           </div>
-           <button className="p-3 bg-zinc-900 border border-zinc-800 text-zinc-400 rounded-xl hover:text-emerald-500">
-             <Settings className="w-5 h-5" />
-           </button>
-        </div>
-
-        <div className="space-y-4">
-          <h3 className="text-xs font-black text-zinc-500 uppercase tracking-widest mb-4">Squad Activity</h3>
-          {picks.map(pick => (
-            <div key={pick.id} className="bg-zinc-900/50 p-4 rounded-2xl border border-zinc-800 border-l-4 border-l-emerald-500">
-               <div className="flex items-center justify-between mb-4">
-                 <div className="flex items-center gap-2">
-                   <span className="text-xs font-bold text-zinc-100">{pick.user}</span>
-                   <span className="text-[10px] text-zinc-500 uppercase tracking-widest">Locked In</span>
-                 </div>
-                 <span className="text-[9px] text-zinc-600 font-mono">{pick.timestamp}</span>
-               </div>
-               <div className="flex items-center gap-3">
-                 <div className="w-10 h-10 bg-zinc-950 rounded-lg flex items-center justify-center border border-zinc-800">
-                    <img src={getHeadshotUrl(pick.playerId, 'NBA')!} className="w-full h-full object-cover" referrerPolicy="no-referrer" />
-                 </div>
-                 <div>
-                    <div className="text-sm font-black text-zinc-100">{pick.playerName} {pick.line}</div>
-                    <div className="text-[9px] text-zinc-500 uppercase tracking-widest font-bold">Lock Score: {pick.score}</div>
-                 </div>
-               </div>
-            </div>
-          ))}
-        </div>
-      </div>
-
-      <div className="bg-zinc-900/80 backdrop-blur-xl border border-zinc-800 rounded-3xl flex flex-col h-[600px]">
-        <div className="p-5 border-b border-zinc-800 flex items-center bg-zinc-950/50 rounded-t-3xl">
-          <MessageSquare className="w-4 h-4 text-emerald-500 mr-2" />
-          <span className="text-[10px] font-black text-zinc-100 uppercase tracking-widest">Squad Comms</span>
-        </div>
-        <div className="flex-1 overflow-y-auto p-5 space-y-4 custom-scrollbar">
-           {messages.map(m => (
-             <div key={m.id} className="space-y-1">
-               <div className="flex items-center gap-2">
-                 <span className="text-[10px] font-black text-emerald-500 uppercase tracking-widest">{m.user}</span>
-                 <span className="text-[8px] text-zinc-600 uppercase">{m.time}</span>
-               </div>
-               <div className="bg-zinc-950/80 p-3 rounded-2xl border border-zinc-800/50 text-xs text-zinc-300 leading-relaxed">
-                 {m.text}
-               </div>
-             </div>
-           ))}
-        </div>
-        <div className="p-4 border-t border-zinc-800">
-           <div className="relative">
-             <input 
-               type="text" 
-               placeholder="Trash talk..." 
-               className="w-full bg-zinc-950 border border-zinc-800 rounded-xl py-2.5 pl-4 pr-12 text-xs focus:outline-none focus:border-emerald-500/50"
-             />
-             <button className="absolute right-2 top-1/2 -translate-y-1/2 p-1.5 text-emerald-500">
-                <ChevronRight className="w-5 h-5" />
-             </button>
-           </div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function RecapsView({ recap }: { recap: any }) {
-  if (!recap) {
-    return (
-      <div className="flex flex-col items-center justify-center p-20 text-center space-y-4 animate-in fade-in duration-500">
-        <Trophy className="w-16 h-16 text-zinc-800 mx-auto" />
-        <div className="space-y-1">
-           <h2 className="text-xl font-black text-zinc-100 uppercase tracking-tight">Weekly Report Card Coming Soon</h2>
-           <p className="text-zinc-500 max-w-sm mx-auto text-xs mt-2">
-             We generate your personal performance analysis every Monday at 8AM. Keep betting to populate your data.
-           </p>
-        </div>
-      </div>
-    );
-  }
-
-  return (
-    <div id="recap-card" className="max-w-4xl mx-auto bg-zinc-950 border-2 border-emerald-500/30 rounded-[40px] p-8 md:p-12 relative overflow-hidden shadow-[0_0_100px_rgba(16,185,129,0.1)] animate-in slide-in-from-bottom-8 duration-700">
-       <div className="absolute top-0 right-0 w-64 h-64 bg-emerald-500/5 blur-[120px] rounded-full -mr-32 -mt-32" />
-       
-       <div className="flex flex-col md:flex-row justify-between gap-8 mb-12 relative z-10">
-          <div>
-            <div className="flex items-center gap-2 px-3 py-1 bg-emerald-500 text-zinc-950 rounded-full text-[10px] font-black uppercase tracking-widest w-fit mb-4">
-              <GraduationCap className="w-3 h-3" /> Performance Recap
-            </div>
-            <h2 className="text-5xl md:text-7xl font-black text-zinc-100 tracking-tighter uppercase leading-tight">Week 18<br /><span className="text-emerald-500">Review</span></h2>
-          </div>
-          <div className="flex flex-col items-end gap-2">
-             <div className="text-8xl font-black text-emerald-500 italic drop-shadow-[0_0_30px_rgba(16,185,129,0.5)]">{recap.grade}</div>
-             <div className="text-[10px] font-black text-zinc-500 uppercase tracking-[0.4em]">Overall Performance</div>
-          </div>
-       </div>
-
-       <div className="grid grid-cols-2 md:grid-cols-4 gap-6 mb-12 relative z-10">
-          {[
-            { label: 'Hit Rate', val: `${recap.hitRate}%`, color: 'text-emerald-500' },
-            { label: 'Net Karma', val: `+${recap.netKarma}`, color: 'text-amber-500' },
-            { label: 'Best Streak', val: `${recap.bestStreak}W`, color: 'text-zinc-100' },
-            { label: 'Best Edge', val: `+${recap.bestEdge}%`, color: 'text-blue-500' }
-          ].map(stat => (
-            <div key={stat.label} className="bg-zinc-900/50 border border-zinc-800/60 p-6 rounded-3xl">
-               <div className={cn("text-3xl font-black mb-1", stat.color)}>{stat.val}</div>
-               <div className="text-[9px] font-black text-zinc-500 uppercase tracking-widest">{stat.label}</div>
-            </div>
-          ))}
-       </div>
-
-       <div className="bg-zinc-900 border border-zinc-800 rounded-3xl p-8 mb-12 relative z-10">
-          <div className="flex items-center gap-3 mb-6">
-             <Sparkles className="w-5 h-5 text-emerald-500" />
-             <h3 className="text-sm font-black text-zinc-100 uppercase tracking-widest">Coach's AI Analysis</h3>
-          </div>
-          <p className="text-zinc-400 leading-relaxed font-medium text-sm md:text-base pr-4 border-l-2 border-emerald-500/50 pl-6">{recap.coachNote}</p>
-       </div>
-
-       <div className="flex flex-col md:flex-row gap-4 relative z-10">
-          <button 
-            onClick={() => {
-               const element = document.getElementById('recap-card');
-               if (element) {
-                 html2canvas(element, { backgroundColor: '#09090b' }).then(canvas => {
-                    const link = document.createElement('a');
-                    link.download = 'weekly-recap.png';
-                    link.href = canvas.toDataURL();
-                    link.click();
-                 });
-               }
-            }}
-            className="flex-1 flex items-center justify-center gap-3 py-4 bg-zinc-100 text-zinc-950 rounded-2xl text-xs font-black uppercase hover:bg-white transition-all shadow-xl"
-          >
-             <Download className="w-4 h-4" /> Export Report Card
-          </button>
-          <button className="flex-1 flex items-center justify-center gap-3 py-4 bg-zinc-900 border border-zinc-800 text-zinc-100 rounded-2xl text-xs font-black uppercase hover:bg-zinc-800 transition-all">
-             <Share2 className="w-4 h-4" /> Share to Feed
-          </button>
-       </div>
-    </div>
-  );
-}
 function ParlaySlip({ slip, onClose, onRemove, onAdd, sport }: { slip: FavoriteProp[], onClose: () => void, onRemove: (id: string) => void, onAdd: (prop: any) => void, sport: Sport }) {
   const [copied, setCopied] = useState(false);
   const [showHedge, setShowHedge] = useState(false);
@@ -3467,7 +2753,7 @@ function ParlaySlip({ slip, onClose, onRemove, onAdd, sport }: { slip: FavoriteP
   );
 }
 
-function FavoritesView({ favorites, setFavorites, sport, onPublish }: { favorites: FavoriteProp[], setFavorites: React.Dispatch<React.SetStateAction<FavoriteProp[]>>, sport: Sport, onPublish: (f: FavoriteProp) => void }) {
+function FavoritesView({ favorites, setFavorites, sport }: { favorites: FavoriteProp[], setFavorites: React.Dispatch<React.SetStateAction<FavoriteProp[]>>, sport: Sport }) {
   const [copiedId, setCopiedId] = useState<number | null>(null);
 
   const handleCopy = (id: number) => {
@@ -3579,15 +2865,6 @@ function FavoritesView({ favorites, setFavorites, sport, onPublish }: { favorite
                 <div className="text-[10px] font-black text-zinc-400 bg-zinc-950 border border-zinc-800 px-3 py-1.5 rounded-lg uppercase tracking-widest">
                   {fav.hitCount}<span className="text-zinc-700 mx-1">/</span>{fav.totalGames} L10
                 </div>
-              </div>
-
-              <div className="flex gap-2 mt-6">
-                <button 
-                  onClick={() => onPublish(fav)}
-                  className="flex-1 flex items-center justify-center gap-2 py-3 bg-emerald-500 text-zinc-950 rounded-xl text-[10px] font-black uppercase hover:bg-emerald-400 active:scale-95 transition-all shadow-lg shadow-emerald-500/20"
-                >
-                  <Share2 className="w-3.5 h-3.5" /> Publish to Community
-                </button>
               </div>
             </div>
           ))}
