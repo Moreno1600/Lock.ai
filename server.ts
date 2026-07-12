@@ -36,6 +36,14 @@ function getSeasonStatus() {
 // Feature 3: Line Movement Store
 const lineMovementStore: Record<string, Array<{line: number, time: string}>> = {};
 
+const mlbTricodes: Record<number, string> = {
+  108: "LAA", 109: "ARI", 110: "BAL", 111: "BOS", 112: "CHC", 113: "CIN",
+  114: "CLE", 115: "COL", 116: "DET", 117: "HOU", 118: "KC", 119: "LAD",
+  120: "WSH", 121: "NYM", 133: "OAK", 134: "PIT", 135: "SD", 136: "SEA",
+  137: "SF", 138: "STL", 139: "TB", 140: "TEX", 141: "TOR", 142: "MIN",
+  143: "PHI", 144: "ATL", 145: "CWS", 146: "MIA", 147: "NYY", 158: "MIL"
+};
+
 // NBA API Headers to avoid blocking
 const nbaHeaders = {
   "Connection": "keep-alive",
@@ -614,6 +622,333 @@ async function startServer() {
   // Season availability per sport
   app.get("/api/season-status", (req, res) => {
     res.json(getSeasonStatus());
+  });
+
+  // ==========================================
+  // --- PARLAY GENERATOR ---
+  // Builds parlays from today's real slate. Only works for in-season sports.
+  // MLB: hydrated rosters w/ season stats -> Poisson prop model -> L10 verification.
+  // NBA: season averages for teams playing today -> normal prop model.
+  // ==========================================
+
+  const mlbCandidateCache: { date: string; players: any[] } = { date: "", players: [] };
+
+  async function getMlbCandidatesForToday() {
+    const dateStr = new Date().toISOString().split("T")[0];
+    if (mlbCandidateCache.date === dateStr && mlbCandidateCache.players.length > 0) {
+      return mlbCandidateCache.players;
+    }
+
+    const sched = await axios.get(
+      `https://statsapi.mlb.com/api/v1/schedule/games/?sportId=1&startDate=${dateStr}&endDate=${dateStr}&hydrate=probablePitcher`,
+      { timeout: 15000 }
+    );
+    const teamsToday = new Map<number, string>();
+    const probableStarters = new Set<number>();
+    (sched.data.dates || []).forEach((d: any) => d.games?.forEach((g: any) => {
+      const state = g.status?.abstractGameState || "";
+      const detailed = (g.status?.detailedState || "").toLowerCase();
+      if (state === "Final" || detailed.includes("postponed") || detailed.includes("cancel")) return;
+      const away = g.teams.away.team, home = g.teams.home.team;
+      teamsToday.set(away.id, `@ ${mlbTricodes[home.id] || home.name}`);
+      teamsToday.set(home.id, `vs ${mlbTricodes[away.id] || away.name}`);
+      if (g.teams.away.probablePitcher?.id) probableStarters.add(g.teams.away.probablePitcher.id);
+      if (g.teams.home.probablePitcher?.id) probableStarters.add(g.teams.home.probablePitcher.id);
+    }));
+    if (teamsToday.size === 0) return [];
+
+    const season = new Date().getFullYear();
+    const rosterResults = await Promise.allSettled(
+      [...teamsToday.keys()].map(teamId =>
+        axios.get(
+          `https://statsapi.mlb.com/api/v1/teams/${teamId}/roster?hydrate=person(stats(type=season))&season=${season}`,
+          { timeout: 15000 }
+        ).then(r => ({ teamId, roster: r.data.roster || [] }))
+      )
+    );
+
+    const players: any[] = [];
+    rosterResults.forEach(result => {
+      if (result.status !== "fulfilled") return;
+      const { teamId, roster } = result.value;
+      roster.forEach((slot: any) => {
+        const p = slot.person;
+        if (!p) return;
+
+        if (slot.position?.code === "1") {
+          // Pitchers: only tonight's probable starters get a strikeout prop
+          if (!probableStarters.has(p.id)) return;
+          const pitching = (p.stats || []).find((s: any) => s.group?.displayName === "pitching")?.splits?.[0]?.stat;
+          if (!pitching) return;
+          const starts = pitching.gamesStarted || 0;
+          if (starts < 8) return;
+          players.push({
+            playerId: p.id,
+            playerName: p.fullName,
+            teamTricode: mlbTricodes[teamId] || "MLB",
+            matchup: teamsToday.get(teamId),
+            gamesPlayed: starts,
+            rates: { SO: (pitching.strikeOuts || 0) / starts }
+          });
+          return;
+        }
+
+        const hitting = (p.stats || []).find((s: any) => s.group?.displayName === "hitting")?.splits?.[0]?.stat;
+        if (!hitting) return;
+        const gp = hitting.gamesPlayed || 0;
+        if (gp < 40) return; // require a real mid-season sample
+        players.push({
+          playerId: p.id,
+          playerName: p.fullName,
+          teamTricode: mlbTricodes[teamId] || "MLB",
+          matchup: teamsToday.get(teamId),
+          gamesPlayed: gp,
+          rates: {
+            TB: (hitting.totalBases || 0) / gp,
+            H_R_RBI: ((hitting.hits || 0) + (hitting.runs || 0) + (hitting.rbi || 0)) / gp
+          }
+        });
+      });
+    });
+
+    mlbCandidateCache.date = dateStr;
+    mlbCandidateCache.players = players;
+    console.log(`Parlay generator: ${players.length} MLB hitters on today's slate`);
+    return players;
+  }
+
+  // P(X >= k) for a Poisson(lambda) count stat
+  function poissonAtLeast(lambda: number, k: number) {
+    let term = Math.exp(-lambda);
+    let cdf = term;
+    for (let i = 1; i < k; i++) {
+      term = term * lambda / i;
+      cdf += term;
+    }
+    return Math.max(0, Math.min(1, 1 - cdf));
+  }
+
+  // P(X > line) under a normal approximation (NBA box-score stats)
+  function normalOver(avg: number, line: number) {
+    const sd = Math.max(1, 1.35 * Math.sqrt(avg));
+    const z = (line - avg) / sd;
+    // Abramowitz-Stegun approximation of the normal CDF
+    const t = 1 / (1 + 0.2316419 * Math.abs(z));
+    const d = 0.3989423 * Math.exp(-z * z / 2);
+    let p = d * t * (0.3193815 + t * (-0.3565638 + t * (1.781478 + t * (-1.821256 + t * 1.330274))));
+    if (z < 0) p = 1 - p;
+    return Math.max(0, Math.min(1, p)); // P(X > line) = 1 - CDF(z) ... p here is upper tail
+  }
+
+  // OVER: highest line (x.5 steps) whose model probability clears the risk threshold
+  function pickLine(rate: number, threshold: number, model: "poisson" | "normal") {
+    let best: { line: number; probability: number } | null = null;
+    for (let k = 0; k <= Math.ceil(rate) + 3; k++) {
+      const line = k + 0.5;
+      const probability = model === "poisson" ? poissonAtLeast(rate, k + 1) : normalOver(rate, line);
+      if (probability >= threshold) best = { line, probability };
+      else break; // probabilities only fall as the line rises
+    }
+    return best;
+  }
+
+  // UNDER: lowest line (x.5 steps) whose stay-under probability clears the threshold
+  function pickUnderLine(rate: number, threshold: number, model: "poisson" | "normal") {
+    for (let k = 0; k <= Math.ceil(rate) + 6; k++) {
+      const line = k + 0.5;
+      const overProb = model === "poisson" ? poissonAtLeast(rate, k + 1) : normalOver(rate, line);
+      const probability = 1 - overProb;
+      if (probability >= threshold) return { line, probability };
+    }
+    return null;
+  }
+
+  async function mlbL10(playerId: number, stat: string, line: number, direction: string) {
+    try {
+      const season = new Date().getFullYear();
+      const group = stat === "SO" ? "pitching" : "hitting";
+      const r = await axios.get(
+        `https://statsapi.mlb.com/api/v1/people/${playerId}/stats?stats=gameLog&group=${group}&season=${season}`,
+        { timeout: 10000 }
+      );
+      const splits = r.data.stats?.[0]?.splits || [];
+      const last10 = splits.slice(-10);
+      if (last10.length < 5) return null;
+      const hits = last10.filter((s: any) => {
+        const st = s.stat || {};
+        const val = stat === "TB" ? (st.totalBases || 0)
+          : stat === "SO" ? (st.strikeOuts || 0)
+          : (st.hits || 0) + (st.runs || 0) + (st.rbi || 0);
+        return direction === "UNDER" ? val < line : val > line;
+      }).length;
+      return { hits, games: last10.length };
+    } catch {
+      return null;
+    }
+  }
+
+  app.get("/api/parlay/generate", async (req, res) => {
+    const sport = String(req.query.sport || "MLB").toUpperCase();
+    const legCount = Math.min(6, Math.max(2, parseInt(String(req.query.legs), 10) || 3));
+    const risk = ["safe", "balanced", "longshot"].includes(String(req.query.risk))
+      ? String(req.query.risk) : "balanced";
+    const thresholds: Record<string, number> = { safe: 0.72, balanced: 0.55, longshot: 0.35 };
+    const threshold = thresholds[risk];
+
+    const excludeIds = new Set(
+      String(req.query.exclude || "").split(",").filter(Boolean).map(Number)
+    );
+
+    const status: any = getSeasonStatus();
+    if (sport === "SOCCER" || !status[sport]?.active) {
+      return res.json({ unavailable: true, sport, resumes: status[sport]?.resumes });
+    }
+
+    try {
+      let candidates: any[] = [];
+      if (sport === "MLB") {
+        candidates = await getMlbCandidatesForToday();
+      } else if (sport === "NBA") {
+        const sb = await axios.get(
+          `https://cdn.nba.com/static/json/liveData/scoreboard/todaysScoreboard_00.json`,
+          { timeout: 10000, headers: cdnHeaders }
+        );
+        const playing = new Map<number, string>();
+        (sb.data?.scoreboard?.games || []).forEach((g: any) => {
+          if (Number(g.gameStatus) === 3) return;
+          playing.set(g.homeTeam.teamId, `vs ${g.awayTeam.teamTricode}`);
+          playing.set(g.awayTeam.teamId, `@ ${g.homeTeam.teamTricode}`);
+        });
+        await fetchPlayers();
+        await fetchSeasonAverages();
+        candidates = playersCache
+          .filter(p => playing.has(p.TEAM_ID) && seasonAveragesCache[p.PERSON_ID])
+          .map(p => ({
+            playerId: p.PERSON_ID,
+            playerName: p.DISPLAY_FIRST_LAST,
+            teamTricode: p.TEAM_ABBREVIATION,
+            matchup: playing.get(p.TEAM_ID),
+            gamesPlayed: 0,
+            rates: {
+              PTS: seasonAveragesCache[p.PERSON_ID].ppg,
+              REB: seasonAveragesCache[p.PERSON_ID].rpg,
+              AST: seasonAveragesCache[p.PERSON_ID].apg
+            }
+          }));
+      }
+
+      if (candidates.length === 0) {
+        return res.json({ unavailable: true, sport, reason: "No games on today's slate." });
+      }
+
+      // Skip players from previous generations, as long as enough fresh options remain
+      if (excludeIds.size > 0) {
+        const fresh = candidates.filter(c => !excludeIds.has(c.playerId));
+        if (fresh.length >= legCount * 3) candidates = fresh;
+      }
+
+      const model = sport === "MLB" ? "poisson" as const : "normal" as const;
+
+      // Every qualifying prop for every player — overs AND unders — grouped by stat category
+      const byStat: Record<string, any[]> = {};
+      candidates.forEach(c => {
+        Object.entries(c.rates as Record<string, number>).forEach(([stat, rate]) => {
+          if (!rate || rate <= 0.3) return;
+          const over = pickLine(rate, threshold, model);
+          if (over) {
+            (byStat[stat] = byStat[stat] || []).push({ ...c, ...over, direction: "OVER", statCategory: stat, seasonRate: rate });
+          }
+          const under = pickUnderLine(rate, threshold, model);
+          if (under) {
+            (byStat[stat] = byStat[stat] || []).push({ ...c, ...under, direction: "UNDER", statCategory: stat, seasonRate: rate });
+          }
+        });
+      });
+      // Longshot hunts the lowest-probability qualifying legs; other risks take the safest
+      Object.values(byStat).forEach(arr =>
+        arr.sort((a, b) => risk === "longshot" ? a.probability - b.probability : b.probability - a.probability)
+      );
+
+      // Round-robin across stat categories so the parlay mixes prop types,
+      // with one prop per player and at most 2 legs per team.
+      // Drafts randomly from the strongest few options in each category so
+      // every regeneration produces a different slip.
+      const categories = Object.keys(byStat);
+      const usedPlayers = new Set<number>();
+      const teamCounts: Record<string, number> = {};
+      const draft = (arr: any[]) => {
+        while (arr.length > 0) {
+          const idx = Math.floor(Math.random() * Math.min(5, arr.length));
+          const cand = arr.splice(idx, 1)[0];
+          if (usedPlayers.has(cand.playerId)) continue;
+          if ((teamCounts[cand.teamTricode] || 0) >= 2) continue;
+          return cand;
+        }
+        return null;
+      };
+      const shortlist: any[] = [];
+      let exhausted = false;
+      while (!exhausted && shortlist.length < legCount + 4) {
+        exhausted = true;
+        for (const cat of categories) {
+          const cand = draft(byStat[cat]);
+          if (!cand) continue;
+          usedPlayers.add(cand.playerId);
+          teamCounts[cand.teamTricode] = (teamCounts[cand.teamTricode] || 0) + 1;
+          shortlist.push(cand);
+          exhausted = false;
+        }
+      }
+
+      // Verify MLB legs against their actual last-10 game logs
+      if (sport === "MLB") {
+        const checks = await Promise.all(
+          shortlist.map(p => mlbL10(p.playerId, p.statCategory, p.line, p.direction))
+        );
+        shortlist.forEach((p, i) => {
+          p.l10 = checks[i];
+          if (checks[i]) {
+            const l10Rate = checks[i]!.hits / checks[i]!.games;
+            p.modelProbability = p.probability;
+            p.probability = 0.5 * p.probability + 0.5 * l10Rate; // blend model with recent form
+          }
+        });
+      }
+
+      // Keep the round-robin order (it guarantees stat variety); just drop cold streaks
+      const minRecentForm = risk === "longshot" ? 0 : 0.4;
+      const legs = shortlist
+        .filter(p => !p.l10 || p.l10.hits / p.l10.games >= minRecentForm)
+        .slice(0, legCount);
+      if (legs.length < 2) {
+        return res.json({ unavailable: true, sport, reason: "Not enough qualifying props today for this risk level." });
+      }
+
+      const combinedProbability = legs.reduce((acc, l) => acc * l.probability, 1);
+      res.json({
+        sport,
+        risk,
+        generatedAt: new Date().toISOString(),
+        legs: legs.map(l => ({
+          playerId: l.playerId,
+          playerName: l.playerName,
+          teamTricode: l.teamTricode,
+          matchup: l.matchup,
+          statCategory: l.statCategory,
+          line: l.line,
+          direction: l.direction,
+          probability: Number(l.probability.toFixed(3)),
+          modelProbability: Number((l.modelProbability ?? l.probability).toFixed(3)),
+          seasonRate: Number(l.seasonRate.toFixed(2)),
+          l10: l.l10 || null
+        })),
+        combinedProbability: Number(combinedProbability.toFixed(4)),
+        fairPayout: Number((1 / combinedProbability).toFixed(2))
+      });
+    } catch (e: any) {
+      console.error("Parlay generator failed:", e.message);
+      res.status(503).json({ error: "Could not build a parlay right now. Try again in a minute." });
+    }
   });
 
   // 4. Get Live Scoreboard
@@ -1405,14 +1740,6 @@ async function startServer() {
       const dates = response.data.dates || [];
       let games: any[] = [];
 
-      const mlbTricodes: Record<number, string> = {
-        108: "LAA", 109: "ARI", 110: "BAL", 111: "BOS", 112: "CHC", 113: "CIN",
-        114: "CLE", 115: "COL", 116: "DET", 117: "HOU", 118: "KC", 119: "LAD",
-        120: "WSH", 121: "NYM", 133: "OAK", 134: "PIT", 135: "SD", 136: "SEA",
-        137: "SF", 138: "STL", 139: "TB", 140: "TEX", 141: "TOR", 142: "MIN",
-        143: "PHI", 144: "ATL", 145: "CWS", 146: "MIA", 147: "NYY", 158: "MIL"
-      };
-      
       dates.forEach((d: any) => {
         d.games?.forEach((g: any) => {
           // abstractGameState: 1 = Preview, 2 = Live, 3 = Final

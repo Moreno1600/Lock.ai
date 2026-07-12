@@ -57,6 +57,7 @@ interface FavoriteProp {
   player: Player;
   statCategory: string;
   targetLine: number;
+  direction?: 'OVER' | 'UNDER';
   hitRate: number;
   hitCount: number;
   totalGames: number;
@@ -865,7 +866,7 @@ export default function App() {
             {activeTab === 'favorites' ? (
               <FavoritesView favorites={favorites} setFavorites={setFavorites} sport={sport} />
             ) : activeTab === 'optimizer' ? (
-              <OptimizerView favorites={favorites} setActiveTab={setActiveTab} sport={sport} />
+              <OptimizerView favorites={favorites} setFavorites={setFavorites} setActiveTab={setActiveTab} sport={sport} seasonStatus={seasonStatus} />
             ) : activeTab === 'import' ? (
               <ScreenshotImporter onPlayerSelect={handleSelectPlayer} setActiveTab={setActiveTab} sport={sport} />
             ) : activeTab === 'tos' ? (
@@ -2642,7 +2643,9 @@ function ParlaySlip({ slip, onClose, onRemove, onAdd, sport }: { slip: FavoriteP
                     <div className="micro-label opacity-60">Team Member</div>
                   </div>
                   <div className="font-bold text-zinc-100">{prop.player.DISPLAY_FIRST_LAST}</div>
-                  <div className="text-xs font-bold text-emerald-500 mt-1">Over {prop.targetLine} {prop.statCategory}</div>
+                  <div className={cn("text-xs font-bold mt-1", prop.direction === 'UNDER' ? "text-sky-400" : "text-emerald-500")}>
+                    {prop.direction === 'UNDER' ? 'Under' : 'Over'} {prop.targetLine} {prop.statCategory}
+                  </div>
                 </div>
               </div>
               
@@ -2840,7 +2843,7 @@ function FavoritesView({ favorites, setFavorites, sport }: { favorites: Favorite
               
               <div className="flex items-center justify-between mt-1">
                 <div className="text-zinc-500 text-sm font-bold uppercase tracking-widest">
-                  Over {fav.targetLine} <span className="text-emerald-500/80">{fav.statCategory}</span>
+                  {fav.direction === 'UNDER' ? 'Under' : 'Over'} {fav.targetLine} <span className={fav.direction === 'UNDER' ? "text-sky-400/80" : "text-emerald-500/80"}>{fav.statCategory}</span>
                 </div>
                 <div className={cn(
                   "px-2 py-0.5 rounded text-[8px] font-black uppercase tracking-tighter",
@@ -3137,8 +3140,64 @@ function ScreenshotImporter({ onPlayerSelect, setActiveTab, sport }: { onPlayerS
   );
 }
 
-function OptimizerView({ favorites, setActiveTab, sport }: { favorites: FavoriteProp[], setActiveTab: (tab: any) => void, sport: Sport }) {
+const statLabels: Record<string, string> = {
+  TB: 'Total Bases', H_R_RBI: 'H+R+RBI', SO: 'Strikeouts', PTS: 'Points', REB: 'Rebounds', AST: 'Assists'
+};
+
+function OptimizerView({ favorites, setFavorites, setActiveTab, sport, seasonStatus }: { favorites: FavoriteProp[], setFavorites: React.Dispatch<React.SetStateAction<FavoriteProp[]>>, setActiveTab: (tab: any) => void, sport: Sport, seasonStatus: Record<string, { active: boolean; resumes: string }> | null }) {
   const [copiedId, setCopiedId] = useState<number | null>(null);
+  const [genLegs, setGenLegs] = useState(3);
+  const [genRisk, setGenRisk] = useState<'safe' | 'balanced' | 'longshot'>('balanced');
+  const [genLoading, setGenLoading] = useState(false);
+  const [genResult, setGenResult] = useState<any>(null);
+  const [genSaved, setGenSaved] = useState(false);
+  const seenPlayersRef = useRef<Set<number>>(new Set());
+
+  // New sport = new slate, so forget which players we've already shown
+  useEffect(() => {
+    seenPlayersRef.current = new Set();
+    setGenResult(null);
+    setGenSaved(false);
+  }, [sport]);
+
+  const sportActive = !seasonStatus || seasonStatus[sport]?.active !== false;
+
+  const handleGenerate = async () => {
+    setGenLoading(true);
+    setGenSaved(false);
+    try {
+      const exclude = Array.from(seenPlayersRef.current).join(',');
+      const res = await axios.get(`/api/parlay/generate?sport=${sport}&legs=${genLegs}&risk=${genRisk}&exclude=${exclude}`);
+      setGenResult(res.data);
+      if (res.data?.legs) {
+        res.data.legs.forEach((leg: any) => seenPlayersRef.current.add(leg.playerId));
+      }
+    } catch {
+      setGenResult({ unavailable: true, reason: 'Generator hit an error — try again in a minute.' });
+    } finally {
+      setGenLoading(false);
+    }
+  };
+
+  const handleSaveParlay = () => {
+    if (!genResult?.legs) return;
+    const newFavs: FavoriteProp[] = genResult.legs.map((leg: any) => ({
+      id: `${leg.playerId}-${leg.statCategory}-${leg.direction}-${leg.line}`,
+      player: { PERSON_ID: leg.playerId, DISPLAY_FIRST_LAST: leg.playerName, TEAM_ABBREVIATION: leg.teamTricode },
+      statCategory: leg.statCategory,
+      targetLine: leg.line,
+      direction: leg.direction,
+      hitRate: leg.probability * 100,
+      hitCount: leg.l10 ? leg.l10.hits : Math.round(leg.probability * 10),
+      totalGames: leg.l10 ? leg.l10.games : 10,
+      sport
+    }));
+    setFavorites(prev => {
+      const existing = new Set(prev.map(f => f.id));
+      return [...prev, ...newFavs.filter(f => !existing.has(f.id))];
+    });
+    setGenSaved(true);
+  };
   const validCategories = sport === 'NBA' ? defaultNbaCategories : sport === 'MLB' ? defaultMlbCategories : defaultSoccerCategories;
   const filteredFavs = favorites.filter(fav => fav.sport === sport && validCategories.includes(fav.statCategory));
   const sortedFavs = [...filteredFavs].sort((a, b) => b.hitRate - a.hitRate);
@@ -3162,6 +3221,168 @@ function OptimizerView({ favorites, setActiveTab, sport }: { favorites: Favorite
             Our AI engine analyzes your favorited props to generate the highest probability parlay configurations.
           </p>
         </div>
+      </div>
+
+      {/* Auto Parlay Generator */}
+      <div className="bg-zinc-900/40 border border-zinc-800/60 rounded-[2rem] p-6 md:p-8 space-y-6 relative overflow-hidden">
+        <div className="absolute top-0 right-0 w-48 h-48 bg-emerald-500/5 blur-3xl rounded-full -mr-24 -mt-24" />
+
+        <div className="flex items-center gap-3 relative z-10">
+          <div className="w-10 h-10 bg-emerald-500/10 rounded-xl flex items-center justify-center">
+            <Sparkles className="w-5 h-5 text-emerald-500" />
+          </div>
+          <div>
+            <h2 className="text-xl font-black text-zinc-100 uppercase tracking-tight">Parlay Generator</h2>
+            <p className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest">Real players from today's {sport} slate</p>
+          </div>
+        </div>
+
+        {!sportActive ? (
+          <div className="flex items-center gap-4 p-5 bg-zinc-950/50 border border-zinc-800/60 rounded-2xl relative z-10">
+            <Calendar className="w-6 h-6 text-zinc-600 shrink-0" />
+            <p className="text-sm text-zinc-500 font-medium">
+              {sport} is in the off-season, so there's no slate to build from. The generator comes back {seasonStatus?.[sport]?.resumes}.
+            </p>
+          </div>
+        ) : (
+          <div className="space-y-6 relative z-10">
+            <div className="flex flex-wrap items-end gap-6">
+              <div className="space-y-2">
+                <div className="micro-label">Legs</div>
+                <div className="flex items-center bg-zinc-950 border border-zinc-800 rounded-xl p-1 gap-1">
+                  {[2, 3, 4, 5].map(n => (
+                    <button
+                      key={n}
+                      onClick={() => setGenLegs(n)}
+                      className={cn(
+                        "w-9 h-9 rounded-lg text-xs font-black transition-all",
+                        genLegs === n ? "bg-emerald-500 text-zinc-950" : "text-zinc-500 hover:text-zinc-200"
+                      )}
+                    >
+                      {n}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div className="space-y-2">
+                <div className="micro-label">Risk Profile</div>
+                <div className="flex items-center bg-zinc-950 border border-zinc-800 rounded-xl p-1 gap-1">
+                  {(['safe', 'balanced', 'longshot'] as const).map(r => (
+                    <button
+                      key={r}
+                      onClick={() => setGenRisk(r)}
+                      className={cn(
+                        "px-4 h-9 rounded-lg text-[10px] font-black uppercase tracking-widest transition-all",
+                        genRisk === r ? "bg-emerald-500 text-zinc-950" : "text-zinc-500 hover:text-zinc-200"
+                      )}
+                    >
+                      {r}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <button
+                onClick={handleGenerate}
+                disabled={genLoading}
+                className="h-11 px-8 bg-emerald-500 text-zinc-950 rounded-xl text-xs font-black uppercase tracking-widest hover:bg-emerald-400 active:scale-95 transition-all disabled:opacity-50 disabled:cursor-wait flex items-center gap-2 shadow-lg shadow-emerald-500/20"
+              >
+                <Zap className="w-4 h-4" />
+                {genLoading ? 'Scanning Slate...' : genResult?.legs ? 'Regenerate' : 'Generate Parlay'}
+              </button>
+            </div>
+
+            {genLoading && (
+              <div className="flex items-center gap-3 text-zinc-500 text-sm font-medium">
+                <div className="w-4 h-4 border-2 border-zinc-700 border-t-emerald-500 rounded-full animate-spin" />
+                Pulling today's games, season stats, and last-10 form...
+              </div>
+            )}
+
+            {!genLoading && genResult?.unavailable && (
+              <div className="p-5 bg-zinc-950/50 border border-zinc-800/60 rounded-2xl text-sm text-zinc-500 font-medium">
+                {genResult.reason || `${sport} is unavailable right now — back ${genResult.resumes}.`}
+              </div>
+            )}
+
+            {!genLoading && genResult?.legs && (
+              <div className="bg-zinc-950/50 border border-zinc-800/60 rounded-3xl overflow-hidden">
+                <div className="divide-y divide-zinc-800/40">
+                  {genResult.legs.map((leg: any, i: number) => (
+                    <div key={`gen-leg-${i}`} className="px-6 py-4 flex items-center justify-between gap-4">
+                      <div className="flex items-center gap-4 min-w-0">
+                        <div className="w-11 h-11 rounded-xl bg-zinc-900 border border-zinc-800 overflow-hidden shrink-0">
+                          <img
+                            src={getHeadshotUrl(leg.playerId, sport)!}
+                            alt={leg.playerName}
+                            className="w-full h-full object-cover"
+                            referrerPolicy="no-referrer"
+                            onError={(e) => {
+                              (e.target as HTMLImageElement).src = `https://ui-avatars.com/api/?name=${encodeURIComponent(leg.playerName)}&background=18181b&color=71717a`;
+                            }}
+                          />
+                        </div>
+                        <div className="min-w-0">
+                          <div className="font-bold text-zinc-100 truncate">{leg.playerName}</div>
+                          <div className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest">
+                            {leg.teamTricode} {leg.matchup}
+                          </div>
+                        </div>
+                      </div>
+                      <div className="text-right shrink-0">
+                        <div className={cn(
+                          "font-black font-mono text-sm",
+                          leg.direction === 'UNDER' ? "text-sky-400" : "text-emerald-400"
+                        )}>
+                          {leg.direction === 'UNDER' ? 'Under' : 'Over'} {leg.line} {statLabels[leg.statCategory] || leg.statCategory}
+                        </div>
+                        <div className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest flex items-center justify-end gap-2 mt-0.5">
+                          <span>{Math.round(leg.probability * 100)}% Conf</span>
+                          {leg.l10 && (
+                            <span className="px-1.5 py-0.5 bg-emerald-500/10 border border-emerald-500/20 rounded text-emerald-500">
+                              L10: {leg.l10.hits}/{leg.l10.games}
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+
+                <div className="bg-zinc-900/50 px-6 py-4 border-t border-zinc-800/60 flex flex-wrap items-center justify-between gap-4">
+                  <div className="flex items-center gap-6">
+                    <div>
+                      <div className="micro-label mb-0.5">Combined Prob</div>
+                      <div className={cn(
+                        "text-xl font-black font-mono tracking-tighter",
+                        genResult.combinedProbability >= 0.5 ? "text-emerald-400" : genResult.combinedProbability >= 0.25 ? "text-yellow-400" : "text-red-400"
+                      )}>
+                        {(genResult.combinedProbability * 100).toFixed(1)}%
+                      </div>
+                    </div>
+                    <div>
+                      <div className="micro-label mb-0.5">Fair Payout</div>
+                      <div className="text-xl font-black font-mono tracking-tighter text-zinc-100">{genResult.fairPayout}x</div>
+                    </div>
+                  </div>
+                  <button
+                    onClick={handleSaveParlay}
+                    disabled={genSaved}
+                    className={cn(
+                      "px-6 py-3 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all active:scale-95",
+                      genSaved
+                        ? "bg-zinc-800 text-emerald-500 cursor-default"
+                        : "bg-emerald-500 text-zinc-950 hover:bg-emerald-400"
+                    )}
+                  >
+                    {genSaved ? '✓ Saved to Favorites' : 'Save All to Favorites'}
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
@@ -3214,7 +3435,7 @@ function OptimizerView({ favorites, setActiveTab, sport }: { favorites: Favorite
                           />
                         </div>
                         <div className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest mt-0.5">
-                          Over {leg.targetLine} {leg.statCategory}
+                          {leg.direction === 'UNDER' ? 'Under' : 'Over'} {leg.targetLine} {leg.statCategory}
                         </div>
                       </div>
                     </div>
@@ -3276,55 +3497,8 @@ function OptimizerView({ favorites, setActiveTab, sport }: { favorites: Favorite
                   </button>
                 )}
               </div>
-
-              <div className="pt-4 border-t border-zinc-800/50 w-full max-w-xs mx-auto">
-                <div className="text-[10px] font-black text-zinc-600 uppercase tracking-[0.3em] flex items-center justify-center gap-2">
-                  <span className="text-emerald-500/50">[ PRO FEATURE ]</span> AI Correlation Engine Active
-                </div>
-              </div>
             </div>
 
-            {/* Teaser Section */}
-            <div className="space-y-6">
-              <div className="flex items-center gap-3">
-                <div className="w-8 h-8 bg-zinc-900 border border-zinc-800 rounded-lg flex items-center justify-center">
-                  <TrendingUp className="w-4 h-4 text-emerald-500" />
-                </div>
-                <h2 className="text-xl font-black text-zinc-100 tracking-tight uppercase">Today's Sharp Correlations</h2>
-              </div>
-
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                {[
-                  { name: 'LeBron James', team: 'LAL', stat: '24.5 Pts', line: 'Over', hitRate: 80, id: 2544 },
-                  { name: 'Anthony Davis', team: 'LAL', stat: '12.5 Reb', line: 'Over', hitRate: 70, id: 203076 }
-                ].map((player, i) => (
-                  <div key={`teaser-${i}`} className="bg-zinc-900/20 border border-zinc-800/40 rounded-3xl p-6 flex items-center justify-between group hover:border-zinc-700/50 transition-all">
-                    <div className="flex items-center gap-4">
-                      <div className="w-12 h-12 bg-zinc-950 rounded-xl overflow-hidden border border-zinc-800">
-                        <img 
-                          src={getHeadshotUrl(player.id, sport)!} 
-                          alt={player.name}
-                          className="w-full h-full object-cover grayscale group-hover:grayscale-0 transition-all"
-                          referrerPolicy="no-referrer"
-                        />
-                      </div>
-                      <div>
-                        <div className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest">{player.team}</div>
-                        <div className="font-bold text-zinc-100">{player.name}</div>
-                      </div>
-                    </div>
-                    <div className="text-right">
-                      <div className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest">{player.line}</div>
-                      <div className="text-emerald-400 font-black font-mono">{player.stat}</div>
-                    </div>
-                  </div>
-                ))}
-              </div>
-
-              <button className="w-full py-4 bg-zinc-900 border border-zinc-800 hover:border-emerald-500/30 text-zinc-100 rounded-2xl text-xs font-black uppercase tracking-widest transition-all shadow-xl group">
-                <span className="group-hover:text-emerald-400 transition-colors">Favorite Both to Unlock AI Analysis</span>
-              </button>
-            </div>
           </div>
         )}
       </div>
