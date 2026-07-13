@@ -1809,8 +1809,157 @@ export default function App() {
 );
 }
 
+function SimulationView({ gameId, sport }: { gameId: string, sport: Sport }) {
+  const [result, setResult] = useState<any>(null);
+  const [loading, setLoading] = useState(false);
+
+  const runSim = async () => {
+    setLoading(true);
+    try {
+      const res = await axios.get(`/api/simulate/${gameId}?sport=${sport}`);
+      setResult(res.data);
+    } catch {
+      setResult({ error: 'Simulation unavailable right now — try again in a minute.' });
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => { runSim(); }, [gameId]);
+
+  if (loading) {
+    return (
+      <div className="flex flex-col items-center justify-center py-20 space-y-4">
+        <div className="w-12 h-12 border-4 border-zinc-800 border-t-emerald-500 rounded-full animate-spin" />
+        <div className="text-zinc-500 font-mono text-xs uppercase tracking-widest">Simulating 10,000 games...</div>
+      </div>
+    );
+  }
+
+  if (!result) return null;
+
+  if (result.unavailable || result.error) {
+    return (
+      <div className="p-8 bg-zinc-900/40 border border-zinc-800/60 rounded-3xl text-center">
+        <p className="text-zinc-500 font-medium">
+          {result.error || result.reason || `Simulations are unavailable right now${result.resumes ? ` — back ${result.resumes}` : ''}.`}
+        </p>
+      </div>
+    );
+  }
+
+  const { home, away, totals, runLine, distribution, mostCommonScore, sims } = result;
+  const awayPct = Math.round(away.winProb * 100);
+  const homePct = Math.round(home.winProb * 100);
+
+  return (
+    <div className="space-y-6 animate-in fade-in duration-500">
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <Calculator className="w-4 h-4 text-emerald-500" />
+          <h4 className="text-sm font-black text-zinc-100 uppercase tracking-widest">Monte Carlo Simulation</h4>
+          <span className="px-2 py-0.5 bg-emerald-500/10 border border-emerald-500/20 rounded text-[9px] font-black text-emerald-500 uppercase tracking-widest">
+            {sims.toLocaleString()} sims
+          </span>
+        </div>
+        <button
+          onClick={runSim}
+          className="px-4 py-2 bg-zinc-900 border border-zinc-800 rounded-xl text-[10px] font-black text-zinc-300 uppercase tracking-widest hover:border-emerald-500/30 hover:text-emerald-400 transition-all active:scale-95"
+        >
+          Re-Run
+        </button>
+      </div>
+
+      {/* Win probability */}
+      <div className="bg-zinc-900/40 border border-zinc-800/60 rounded-3xl p-6 space-y-4">
+        <div className="micro-label">Win Probability</div>
+        <div className="flex items-center justify-between text-sm font-black">
+          <span className="text-zinc-100">{away.tricode} {awayPct}%</span>
+          <span className="text-zinc-100">{home.tricode} {homePct}%</span>
+        </div>
+        <div className="h-3 bg-zinc-950 rounded-full overflow-hidden flex border border-zinc-800">
+          <div className="h-full bg-sky-500/70" style={{ width: `${awayPct}%` }} />
+          <div className="h-full bg-emerald-500/70" style={{ width: `${100 - awayPct}%` }} />
+        </div>
+        <div className="flex items-center justify-between text-[10px] font-bold text-zinc-500 uppercase tracking-widest">
+          <span>Projected: {away.tricode} {away.projRuns} — {home.projRuns} {home.tricode}</span>
+          {mostCommonScore && <span>Most common: {mostCommonScore.score} ({mostCommonScore.pct}%)</span>}
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+        {/* Run line */}
+        <div className="bg-zinc-900/40 border border-zinc-800/60 rounded-3xl p-6 space-y-4">
+          <div className="micro-label">Run Line</div>
+          <div className="space-y-3">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-bold text-zinc-300">{home.tricode} -1.5</span>
+              <span className="text-sm font-black font-mono text-emerald-400">{Math.round(runLine.homeMinus15 * 100)}%</span>
+            </div>
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-bold text-zinc-300">{away.tricode} +1.5</span>
+              <span className="text-sm font-black font-mono text-sky-400">{Math.round(runLine.awayPlus15 * 100)}%</span>
+            </div>
+          </div>
+          <div className="pt-3 border-t border-zinc-800/50 space-y-1">
+            <div className="text-[10px] font-bold text-zinc-600 uppercase tracking-widest">Season scoring rates</div>
+            <div className="text-[10px] font-mono text-zinc-500">{away.tricode}: {away.seasonRpg} scored / {away.seasonRapg} allowed per game</div>
+            <div className="text-[10px] font-mono text-zinc-500">{home.tricode}: {home.seasonRpg} scored / {home.seasonRapg} allowed per game</div>
+          </div>
+        </div>
+
+        {/* Totals ladder */}
+        <div className="bg-zinc-900/40 border border-zinc-800/60 rounded-3xl p-6 space-y-4">
+          <div className="micro-label">Total Runs — Over/Under</div>
+          <div className="space-y-2">
+            {totals.map((t: any) => (
+              <div key={t.line} className="flex items-center gap-3">
+                <span className="text-xs font-black font-mono text-zinc-300 w-10">{t.line}</span>
+                <div className="flex-1 h-2 bg-zinc-950 rounded-full overflow-hidden flex border border-zinc-800/50">
+                  <div className="h-full bg-emerald-500/60" style={{ width: `${t.overProb * 100}%` }} />
+                </div>
+                <span className="text-[10px] font-black font-mono text-emerald-400 w-16 text-right">O {Math.round(t.overProb * 100)}%</span>
+                <span className="text-[10px] font-black font-mono text-sky-400 w-16 text-right">U {Math.round((1 - t.overProb) * 100)}%</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      {/* Total runs distribution */}
+      <div className="bg-zinc-900/40 border border-zinc-800/60 rounded-3xl p-6 space-y-4">
+        <div className="micro-label">Total Runs Distribution</div>
+        <div className="h-44">
+          <ResponsiveContainer width="100%" height="100%">
+            <AreaChart data={distribution}>
+              <defs>
+                <linearGradient id="simGradient" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="5%" stopColor="#10b981" stopOpacity={0.3} />
+                  <stop offset="95%" stopColor="#10b981" stopOpacity={0} />
+                </linearGradient>
+              </defs>
+              <CartesianGrid strokeDasharray="3 3" stroke="#27272a" vertical={false} />
+              <XAxis dataKey="total" tick={{ fontSize: 10, fill: '#71717a' }} />
+              <YAxis hide />
+              <Tooltip
+                contentStyle={{ background: '#09090b', border: '1px solid #27272a', borderRadius: '12px' }}
+                formatter={(value: any) => [`${value}% of sims`, 'Frequency']}
+                labelFormatter={(label: any) => `${label} total runs`}
+              />
+              <Area type="monotone" dataKey="pct" stroke="#10b981" strokeWidth={2} fill="url(#simGradient)" />
+            </AreaChart>
+          </ResponsiveContainer>
+        </div>
+        <p className="text-[10px] text-zinc-600 font-medium leading-relaxed">
+          Model: each team's expected runs blend season scoring vs. the opponent's run prevention (small home-field bump), sampled {sims.toLocaleString()} times.
+        </p>
+      </div>
+    </div>
+  );
+}
+
 function GameCenter({ gameId, onClose, sport, onSelectPlayer }: { gameId: string; onClose: () => void, sport: Sport, onSelectPlayer: (player: Player) => void }) {
-  const [activeTab, setActiveTab] = useState<'roster' | 'boxscore' | 'ai' | 'feed'>('boxscore');
+  const [activeTab, setActiveTab] = useState<'roster' | 'boxscore' | 'ai' | 'feed' | 'sim'>('boxscore');
   const [gameData, setGameData] = useState<any>(null);
   const [plays, setPlays] = useState<any[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -1947,6 +2096,7 @@ function GameCenter({ gameId, onClose, sport, onSelectPlayer }: { gameId: string
           <TabButton active={activeTab === 'roster'} onClick={() => setActiveTab('roster')} label="Roster" />
           <TabButton active={activeTab === 'boxscore'} onClick={() => setActiveTab('boxscore')} label="Box Score" />
           <TabButton active={activeTab === 'ai'} onClick={() => setActiveTab('ai')} label="AI Insight" />
+          <TabButton active={activeTab === 'sim'} onClick={() => setActiveTab('sim')} label="Simulator" icon={<Calculator className="w-3.5 h-3.5" />} />
         </div>
 
         {/* Content */}
@@ -1983,6 +2133,10 @@ function GameCenter({ gameId, onClose, sport, onSelectPlayer }: { gameId: string
               <BoxScoreTable team={awayTeam} sport={sport} onSelectPlayer={onSelectPlayer} />
               <BoxScoreTable team={homeTeam} sport={sport} onSelectPlayer={onSelectPlayer} />
             </div>
+          )}
+
+          {activeTab === 'sim' && (
+            <SimulationView gameId={gameId} sport={sport} />
           )}
 
           {activeTab === 'ai' && (

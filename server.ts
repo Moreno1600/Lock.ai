@@ -36,6 +36,14 @@ function getSeasonStatus() {
 // Feature 3: Line Movement Store
 const lineMovementStore: Record<string, Array<{line: number, time: string}>> = {};
 
+// Local calendar date (UTC rolls over mid-evening in the US and would ask
+// the league APIs for tomorrow's schedule)
+function localDateStr(daysFromNow = 0) {
+  const d = new Date();
+  d.setDate(d.getDate() + daysFromNow);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
 const mlbTricodes: Record<number, string> = {
   108: "LAA", 109: "ARI", 110: "BAL", 111: "BOS", 112: "CHC", 113: "CIN",
   114: "CLE", 115: "COL", 116: "DET", 117: "HOU", 118: "KC", 119: "LAD",
@@ -634,27 +642,33 @@ async function startServer() {
   const mlbCandidateCache: { date: string; players: any[] } = { date: "", players: [] };
 
   async function getMlbCandidatesForToday() {
-    const dateStr = new Date().toISOString().split("T")[0];
+    const dateStr = localDateStr();
     if (mlbCandidateCache.date === dateStr && mlbCandidateCache.players.length > 0) {
       return mlbCandidateCache.players;
     }
 
+    // Look up to a week ahead so the generator still works late at night
+    // and across the All-Star break — use the next slate with playable games
     const sched = await axios.get(
-      `https://statsapi.mlb.com/api/v1/schedule/games/?sportId=1&startDate=${dateStr}&endDate=${dateStr}&hydrate=probablePitcher`,
+      `https://statsapi.mlb.com/api/v1/schedule/games/?sportId=1&startDate=${dateStr}&endDate=${localDateStr(7)}&hydrate=probablePitcher`,
       { timeout: 15000 }
     );
     const teamsToday = new Map<number, string>();
     const probableStarters = new Set<number>();
-    (sched.data.dates || []).forEach((d: any) => d.games?.forEach((g: any) => {
-      const state = g.status?.abstractGameState || "";
-      const detailed = (g.status?.detailedState || "").toLowerCase();
-      if (state === "Final" || detailed.includes("postponed") || detailed.includes("cancel")) return;
-      const away = g.teams.away.team, home = g.teams.home.team;
-      teamsToday.set(away.id, `@ ${mlbTricodes[home.id] || home.name}`);
-      teamsToday.set(home.id, `vs ${mlbTricodes[away.id] || away.name}`);
-      if (g.teams.away.probablePitcher?.id) probableStarters.add(g.teams.away.probablePitcher.id);
-      if (g.teams.home.probablePitcher?.id) probableStarters.add(g.teams.home.probablePitcher.id);
-    }));
+    for (const d of (sched.data.dates || [])) {
+      (d.games || []).forEach((g: any) => {
+        const state = g.status?.abstractGameState || "";
+        const detailed = (g.status?.detailedState || "").toLowerCase();
+        if (!["R", "F", "D", "L", "W"].includes(g.gameType)) return; // regular season + playoffs only
+        if (state === "Final" || detailed.includes("postponed") || detailed.includes("cancel")) return;
+        const away = g.teams.away.team, home = g.teams.home.team;
+        teamsToday.set(away.id, `@ ${mlbTricodes[home.id] || home.name}`);
+        teamsToday.set(home.id, `vs ${mlbTricodes[away.id] || away.name}`);
+        if (g.teams.away.probablePitcher?.id) probableStarters.add(g.teams.away.probablePitcher.id);
+        if (g.teams.home.probablePitcher?.id) probableStarters.add(g.teams.home.probablePitcher.id);
+      });
+      if (teamsToday.size > 0) break; // first day with playable games is the slate
+    }
     if (teamsToday.size === 0) return [];
 
     const season = new Date().getFullYear();
@@ -786,6 +800,151 @@ async function startServer() {
       return null;
     }
   }
+
+  // ==========================================
+  // --- GAME SIMULATOR (Monte Carlo) ---
+  // Simulates a game thousands of times from real team scoring rates:
+  // offense = runs scored per game, defense = runs allowed per game.
+  // ==========================================
+
+  const mlbTeamStatsCache: { date: string; stats: Record<number, { rpg: number; rapg: number; name: string }> } = { date: "", stats: {} };
+
+  async function getMlbTeamRates(teamId: number) {
+    const dateStr = localDateStr();
+    if (mlbTeamStatsCache.date !== dateStr) {
+      mlbTeamStatsCache.date = dateStr;
+      mlbTeamStatsCache.stats = {};
+    }
+    if (mlbTeamStatsCache.stats[teamId]) return mlbTeamStatsCache.stats[teamId];
+
+    const season = new Date().getFullYear();
+    const r = await axios.get(
+      `https://statsapi.mlb.com/api/v1/teams/${teamId}/stats?stats=season&group=hitting,pitching&season=${season}`,
+      { timeout: 15000 }
+    );
+    const groups = r.data.stats || [];
+    const hitting = groups.find((g: any) => g.group?.displayName === "hitting")?.splits?.[0]?.stat;
+    const pitching = groups.find((g: any) => g.group?.displayName === "pitching")?.splits?.[0]?.stat;
+    if (!hitting || !pitching) throw new Error(`No season stats for team ${teamId}`);
+
+    const entry = {
+      rpg: (hitting.runs || 0) / Math.max(1, hitting.gamesPlayed || 0),
+      rapg: (pitching.runs || 0) / Math.max(1, pitching.gamesPlayed || 0),
+      name: mlbTricodes[teamId] || String(teamId)
+    };
+    mlbTeamStatsCache.stats[teamId] = entry;
+    return entry;
+  }
+
+  // Knuth Poisson sampler
+  function samplePoisson(lambda: number) {
+    const L = Math.exp(-lambda);
+    let k = 0, p = 1;
+    do { k++; p *= Math.random(); } while (p > L);
+    return k - 1;
+  }
+
+  app.get("/api/simulate/:gameId", async (req, res) => {
+    const sport = String(req.query.sport || "MLB").toUpperCase();
+    const sims = Math.min(20000, Math.max(1000, parseInt(String(req.query.sims), 10) || 10000));
+
+    const status: any = getSeasonStatus();
+    if (sport !== "MLB") {
+      return res.json({ unavailable: true, sport, reason: sport === "NBA" ? `NBA simulations return ${status.NBA.resumes}.` : "Simulations are MLB-only for now." });
+    }
+    if (!status.MLB.active) {
+      return res.json({ unavailable: true, sport, resumes: status.MLB.resumes });
+    }
+
+    try {
+      // Find the matchup on the schedule (up to a week out, for late nights
+      // and the All-Star break)
+      const sched = await axios.get(
+        `https://statsapi.mlb.com/api/v1/schedule/games/?sportId=1&startDate=${localDateStr()}&endDate=${localDateStr(7)}`,
+        { timeout: 15000 }
+      );
+      let matchup: { homeId: number; awayId: number } | null = null;
+      (sched.data.dates || []).forEach((d: any) => d.games?.forEach((g: any) => {
+        if (!["R", "F", "D", "L", "W"].includes(g.gameType)) return; // no exhibitions
+        if (String(g.gamePk) === String(req.params.gameId)) {
+          matchup = { homeId: g.teams.home.team.id, awayId: g.teams.away.team.id };
+        }
+      }));
+      if (!matchup) {
+        return res.status(404).json({ error: "Game not found on today's slate." });
+      }
+
+      const [home, away] = await Promise.all([
+        getMlbTeamRates(matchup.homeId),
+        getMlbTeamRates(matchup.awayId)
+      ]);
+
+      // Expected runs: blend of a team's offense and the opponent's run prevention,
+      // with a small home-field bump (~4%)
+      const lambdaHome = ((home.rpg + away.rapg) / 2) * 1.04;
+      const lambdaAway = (away.rpg + home.rapg) / 2;
+
+      let homeWins = 0;
+      let homeRunsTotal = 0;
+      let awayRunsTotal = 0;
+      let homeCoversMinus15 = 0;
+      const totalsCounts: Record<number, number> = {};
+      const scoreCounts: Record<string, number> = {};
+
+      for (let i = 0; i < sims; i++) {
+        let h = samplePoisson(lambdaHome);
+        let a = samplePoisson(lambdaAway);
+        // Extra innings: no ties in baseball
+        while (h === a) {
+          h += samplePoisson(lambdaHome / 9);
+          a += samplePoisson(lambdaAway / 9);
+        }
+        if (h > a) homeWins++;
+        if (h - a >= 2) homeCoversMinus15++;
+        homeRunsTotal += h;
+        awayRunsTotal += a;
+        const total = h + a;
+        totalsCounts[total] = (totalsCounts[total] || 0) + 1;
+        const key = `${a}-${h}`;
+        scoreCounts[key] = (scoreCounts[key] || 0) + 1;
+      }
+
+      // Over probabilities for standard total-run lines
+      const totalLines = [6.5, 7.5, 8.5, 9.5, 10.5];
+      const totals = totalLines.map(line => {
+        let overCount = 0;
+        Object.entries(totalsCounts).forEach(([t, count]) => {
+          if (Number(t) > line) overCount += count;
+        });
+        return { line, overProb: Number((overCount / sims).toFixed(3)) };
+      });
+
+      // Distribution of total runs for the chart (trim the long tail)
+      const distribution = Object.entries(totalsCounts)
+        .map(([t, count]) => ({ total: Number(t), pct: Number((count / sims * 100).toFixed(1)) }))
+        .sort((a, b) => a.total - b.total)
+        .filter(d => d.total <= 18);
+
+      const topScore = Object.entries(scoreCounts).sort((a, b) => b[1] - a[1])[0];
+
+      res.json({
+        sport,
+        sims,
+        home: { teamId: matchup.homeId, tricode: home.name, winProb: Number((homeWins / sims).toFixed(3)), projRuns: Number((homeRunsTotal / sims).toFixed(1)), seasonRpg: Number(home.rpg.toFixed(2)), seasonRapg: Number(home.rapg.toFixed(2)) },
+        away: { teamId: matchup.awayId, tricode: away.name, winProb: Number(((sims - homeWins) / sims).toFixed(3)), projRuns: Number((awayRunsTotal / sims).toFixed(1)), seasonRpg: Number(away.rpg.toFixed(2)), seasonRapg: Number(away.rapg.toFixed(2)) },
+        runLine: {
+          homeMinus15: Number((homeCoversMinus15 / sims).toFixed(3)),
+          awayPlus15: Number(((sims - homeCoversMinus15) / sims).toFixed(3))
+        },
+        totals,
+        distribution,
+        mostCommonScore: topScore ? { score: topScore[0], pct: Number((topScore[1] / sims * 100).toFixed(1)) } : null
+      });
+    } catch (e: any) {
+      console.error("Simulation failed:", e.message);
+      res.status(503).json({ error: "Could not run the simulation right now." });
+    }
+  });
 
   app.get("/api/parlay/generate", async (req, res) => {
     const sport = String(req.query.sport || "MLB").toUpperCase();
@@ -1721,27 +1880,25 @@ async function startServer() {
   app.get("/api/mlb/scoreboard", async (req, res) => {
     if (!getSeasonStatus().MLB.active) return res.json([]);
     try {
-      const today = new Date();
-      const tmrw = new Date();
-      tmrw.setDate(tmrw.getDate() + 1);
-      const dateStr = today.toISOString().split('T')[0];
-      const tmrwStr = tmrw.toISOString().split('T')[0];
-
+      // Look up to a week ahead: after the last game of the night (or during
+      // the All-Star break) show the next slate instead of an empty board
       const response = await axios.get(
-        `https://statsapi.mlb.com/api/v1/schedule/games/?sportId=1&startDate=${dateStr}&endDate=${tmrwStr}`,
-        { 
+        `https://statsapi.mlb.com/api/v1/schedule/games/?sportId=1&startDate=${localDateStr()}&endDate=${localDateStr(7)}`,
+        {
           timeout: 20000,
           headers: {
             "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
           }
         }
       );
-      
+
       const dates = response.data.dates || [];
       let games: any[] = [];
 
-      dates.forEach((d: any) => {
+      for (const d of dates) {
+        if (games.length > 0) break; // first day with playable games only
         d.games?.forEach((g: any) => {
+          if (!["R", "F", "D", "L", "W"].includes(g.gameType)) return; // regular season + playoffs only
           // abstractGameState: 1 = Preview, 2 = Live, 3 = Final
           const gameStatus = g.status.abstractGameState === "Final" ? 3 : g.status.abstractGameState === "Live" ? 2 : 1;
           const detailedState = (g.status.detailedState || "").toLowerCase();
@@ -1768,8 +1925,8 @@ async function startServer() {
             });
           }
         });
-      });
-      
+      }
+
       res.json(games);
     } catch (error) {
       console.warn("MLB Scoreboard API unavailable. Returning no games.");
