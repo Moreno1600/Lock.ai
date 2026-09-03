@@ -443,6 +443,44 @@ async function startServer() {
     }
   });
 
+  app.post("/api/analyze-player", async (req, res) => {
+    try {
+      const { selectedPlayer, status, statCategory, isValidTarget, targetNum, analysisDataStr, sport } = req.body;
+      const rawKey = process.env.API_KEY || process.env.GEMINI_API_KEY;
+      const apiKey = rawKey?.trim();
+      if (!apiKey) throw new Error("API key missing");
+      const ai = new GoogleGenAI({ apiKey });
+
+      const prompt = `
+        You are an expert ${sport} sports analyst. Analyze the following player's recent performance for prop betting.
+        
+        Player: ${selectedPlayer.DISPLAY_FIRST_LAST}
+        Status: ${status.role}, ${status.injury_status}
+        Category: ${statCategory}
+        ${isValidTarget ? `Target: ${targetNum}` : ''}
+        
+        Recent Data: ${analysisDataStr}
+        
+        CRITICAL: Provide exactly 2-3 sentences of high-impact analysis. No headers, no bullet points.
+        
+        Then, provide these exact formats on their own lines at the end:
+        PROJECTION: [number]
+        LOCK_SCORE: [number 0-100]
+        ELI5: [A one-sentence summary]
+      `;
+
+      const response = await ai.models.generateContent({
+        model: "gemini-3-flash-preview",
+        contents: [{ parts: [{ text: prompt }] }],
+      });
+      
+      res.json({ text: response.text || "" });
+    } catch (error: any) {
+      console.error("Analyze player error:", error);
+      res.status(500).json({ error: error.message });
+    }
+  });
+
   // 1. Search Players
   app.get("/api/players/search", async (req, res) => {
     const query = (req.query.q as string || "").toLowerCase();

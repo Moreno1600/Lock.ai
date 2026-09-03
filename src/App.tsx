@@ -5,7 +5,6 @@ import { Search, Activity, TrendingUp, AlertCircle, User, Calendar, ChevronRight
 import { cn } from './lib/utils';
 import { LineChart, Line, AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine } from 'recharts';
 import ReactMarkdown from 'react-markdown';
-import { GoogleGenAI } from "@google/genai";
 import html2canvas from 'html2canvas';
 
 interface Player {
@@ -467,13 +466,6 @@ export default function App() {
     
     setIsAnalyzing(true);
     try {
-      const rawKey = process.env.API_KEY || process.env.GEMINI_API_KEY;
-      const apiKey = rawKey?.trim();
-      if (!apiKey) {
-        throw new Error("API key is not set in the environment variables.");
-      }
-      const ai = new GoogleGenAI({ apiKey });
-      
       let analysisDataStr = '';
       if (sport === 'NBA') {
          analysisDataStr = JSON.stringify(games.slice(0, 10).map((g: any) => ({
@@ -489,30 +481,11 @@ export default function App() {
         })), null, 2);
       }
 
-      const prompt = `
-        You are an expert ${sport} sports analyst. Analyze the following player's recent performance for prop betting.
-        
-        Player: ${selectedPlayer.DISPLAY_FIRST_LAST}
-        Status: ${status.role}, ${status.injury_status}
-        Category: ${statCategory}
-        ${isValidTarget ? `Target: ${targetNum}` : ''}
-        
-        Recent Data: ${analysisDataStr}
-        
-        CRITICAL: Provide exactly 2-3 sentences of high-impact analysis. No headers, no bullet points.
-        
-        Then, provide these exact formats on their own lines at the end:
-        PROJECTION: [number]
-        LOCK_SCORE: [number 0-100]
-        ELI5: [A one-sentence summary]
-      `;
-
-      const response = await ai.models.generateContent({
-        model: "gemini-3-flash-preview",
-        contents: [{ parts: [{ text: prompt }] }],
+      const response = await axios.post("/api/analyze-player", {
+        selectedPlayer, status, statCategory, isValidTarget, targetNum, analysisDataStr, sport
       });
       
-      const fullText = response.text || "";
+      const fullText = response.data.text || "";
       setAnalysis(""); // Clear previous analysis
       setLockScore(null);
       setEli5Summary(null);
