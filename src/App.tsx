@@ -49,7 +49,7 @@ interface PlayerStatus {
   usage_increase?: number;
 }
 
-type Sport = 'NBA' | 'MLB' | 'SOCCER';
+type Sport = 'NBA' | 'MLB' | 'NFL';
 
 interface FavoriteProp {
   id: string;
@@ -66,15 +66,15 @@ interface FavoriteProp {
 
 const defaultNbaCategories = ['PTS', 'REB', 'AST', 'PRA', 'RA', 'PR', 'PA', 'FAN', '3PM'];
 const defaultMlbCategories = ['PTS', 'TB', 'SO', 'OUTS', 'ER', 'H_R_RBI']; // Mixed simplified
-const defaultSoccerCategories = ['G', 'A', 'S', 'SOT', 'T', 'P', 'FS', 'FC', 'PTS'];
+const defaultNflCategories = ['PASS_YDS', 'RUSH_YDS', 'REC_YDS', 'REC', 'PASS_TD', 'TD', 'CMP', 'PTS'];
 
 export const getHeadshotUrl = (id: number, sport: Sport = 'NBA') => {
   if (!id) return null;
   if (sport === 'MLB') {
     return `https://img.mlbstatic.com/mlb-photos/image/upload/d_people:generic:headshot:67:current.png/w_213,q_auto:best/v1/people/${id}/headshot/67/current`;
   }
-  if (sport === 'SOCCER') {
-    return `https://a.espncdn.com/i/headshots/soccer/players/full/${id}.png`;
+  if (sport === 'NFL') {
+    return `https://a.espncdn.com/i/headshots/nfl/players/full/${id}.png`;
   }
   return `https://cdn.nba.com/headshots/nba/latest/260x190/${id}.png`;
 };
@@ -151,24 +151,18 @@ export const getTeamLogoUrl = (tricode: string, sport: Sport = 'NBA') => {
     };
     if (mlbMap[normalized]) normalized = mlbMap[normalized];
   } else {
-    // Soccer ESPN Mappings
-    const soccerMap: Record<string, string> = {
-      'rmd': 'real-madrid',
-      'bar': 'barcelona',
-      'mci': 'manchester-city',
-      'ars': 'arsenal',
-      'liv': 'liverpool',
-      'mun': 'manchester-united',
-      'che': 'chelsea',
-      'bay': 'bayern-munich',
-      'psg': 'paris-saint-germain',
-      'juv': 'juventus',
-      'int': 'internazionale',
-      'mil': 'ac-milan',
-      'atm': 'atletico-madrid',
-      'bvb': 'borussia-dortmund'
+    // NFL ESPN Mappings
+    const nflMap: Record<string, string> = {
+      'ari': 'ari', 'atl': 'atl', 'bal': 'bal', 'buf': 'buf',
+      'car': 'car', 'chi': 'chi', 'cin': 'cin', 'cle': 'cle',
+      'dal': 'dal', 'den': 'den', 'det': 'det', 'gb': 'gb',
+      'hou': 'hou', 'ind': 'ind', 'jax': 'jax', 'kc': 'kc',
+      'lv': 'lv', 'lac': 'lac', 'lar': 'lar', 'mia': 'mia',
+      'min': 'min', 'ne': 'ne', 'no': 'no', 'nyg': 'nyg',
+      'nyj': 'nyj', 'phi': 'phi', 'pit': 'pit', 'sf': 'sf',
+      'sea': 'sea', 'tb': 'tb', 'ten': 'ten', 'was': 'wsh', 'wsh': 'wsh'
     };
-    if (soccerMap[normalized]) normalized = soccerMap[normalized];
+    if (nflMap[normalized]) normalized = nflMap[normalized];
   }
   
   return `https://a.espncdn.com/i/teamlogos/${sport.toLowerCase()}/500/${normalized}.png`;
@@ -205,10 +199,14 @@ const getTeamColor = (team: string | undefined | null, sport: Sport): string => 
     return colors[normalized] || '#18181b';
   } else {
     const colors: Record<string, string> = {
-      'rmd': '#00529F', 'bar': '#004D98', 'mci': '#6CABDD', 'ars': '#EF0107',
-      'liv': '#C8102E', 'mun': '#DA291C', 'che': '#034694', 'bay': '#DC052D',
-      'psg': '#004170', 'juv': '#000000', 'int': '#005395', 'mil': '#E30613',
-      'atm': '#CB3524', 'bvb': '#FDE100'
+      'kc': '#E31837', 'sf': '#AA0000', 'bal': '#241773', 'phi': '#004C54',
+      'buf': '#00338D', 'min': '#4F2683', 'dal': '#041E42', 'det': '#0076B6',
+      'cin': '#FB4F14', 'mia': '#008E97', 'gb': '#203731', 'hou': '#03202F',
+      'den': '#FB4F14', 'lac': '#0080C6', 'pit': '#FFB612', 'sea': '#002244',
+      'tb': '#D3BC8D', 'atl': '#A71930', 'chi': '#0B162A', 'cle': '#311D00',
+      'ind': '#002C5F', 'jax': '#006778', 'lv': '#000000', 'lar': '#003594',
+      'ne': '#002244', 'no': '#D3BC8D', 'nyg': '#0B2265', 'nyj': '#125740',
+      'ten': '#0C2340', 'was': '#5A1414', 'car': '#0085CA', 'ari': '#97233F'
     };
     return colors[normalized] || '#18181b';
   }
@@ -225,7 +223,7 @@ const sortPlayers = (players: any[] | undefined, sport: Sport) => {
     if (isStarterA && !isStarterB) return -1;
     if (!isStarterA && isStarterB) return 1;
 
-    // 2. Sort by points/hits/goals if available (Performance)
+    // 2. Sort by performance
     const statsA = a.statistics || {};
     const statsB = b.statistics || {};
     
@@ -233,13 +231,13 @@ const sortPlayers = (players: any[] | undefined, sport: Sport) => {
       ? (Number(statsA.points) || 0) + (Number(statsA.reboundsTotal) || 0) * 0.5 + (Number(statsA.assists) || 0) * 0.5
       : sport === 'MLB'
         ? (Number(statsA.hits) || 0) + (Number(statsA.homeRuns) || 0) * 2 + (Number(statsA.rbi) || 0)
-        : (Number(statsA.goals) || 0) * 3 + (Number(statsA.assists) || 0) * 2 + (Number(statsA.shots) || 0);
+        : (Number(statsA.passYds) || 0) * 0.04 + (Number(statsA.rushYds) || 0) * 0.1 + (Number(statsA.recYds) || 0) * 0.1 + (Number(statsA.touchdowns) || 0) * 6;
 
     const performanceB = sport === 'NBA' 
       ? (Number(statsB.points) || 0) + (Number(statsB.reboundsTotal) || 0) * 0.5 + (Number(statsB.assists) || 0) * 0.5
       : sport === 'MLB'
         ? (Number(statsB.hits) || 0) + (Number(statsB.homeRuns) || 0) * 2 + (Number(statsB.rbi) || 0)
-        : (Number(statsB.goals) || 0) * 3 + (Number(statsB.assists) || 0) * 2 + (Number(statsB.shots) || 0);
+        : (Number(statsB.passYds) || 0) * 0.04 + (Number(statsB.rushYds) || 0) * 0.1 + (Number(statsB.recYds) || 0) * 0.1 + (Number(statsB.touchdowns) || 0) * 6;
 
     if (Math.abs(performanceA - performanceB) > 0.1) return performanceB - performanceA;
 
@@ -279,7 +277,7 @@ export default function App() {
 
   // Change category when sport changes
   useEffect(() => {
-    setStatCategory(sport === 'SOCCER' ? 'G' : 'PTS');
+    setStatCategory(sport === 'NFL' ? 'PASS_YDS' : 'PTS');
     setSearchResults([]);
     setSelectedPlayer(null);
   }, [sport]);
@@ -364,12 +362,12 @@ export default function App() {
       ]);
     } else {
       setTrendingPlayers([
-        { PERSON_ID: 10001, DISPLAY_FIRST_LAST: 'Cristiano Ronaldo', TEAM_ABBREVIATION: 'RMD' },
-        { PERSON_ID: 10002, DISPLAY_FIRST_LAST: 'Lionel Messi', TEAM_ABBREVIATION: 'BAR' },
-        { PERSON_ID: 10003, DISPLAY_FIRST_LAST: 'Kylian Mbappé', TEAM_ABBREVIATION: 'PSG' },
-        { PERSON_ID: 10004, DISPLAY_FIRST_LAST: 'Erling Haaland', TEAM_ABBREVIATION: 'MCI' },
-        { PERSON_ID: 10005, DISPLAY_FIRST_LAST: 'Jude Bellingham', TEAM_ABBREVIATION: 'RMD' },
-        { PERSON_ID: 10006, DISPLAY_FIRST_LAST: 'Bukayo Saka', TEAM_ABBREVIATION: 'ARS' }
+        { PERSON_ID: 3139477, DISPLAY_FIRST_LAST: 'Patrick Mahomes', TEAM_ABBREVIATION: 'KC' },
+        { PERSON_ID: 3916387, DISPLAY_FIRST_LAST: 'Lamar Jackson', TEAM_ABBREVIATION: 'BAL' },
+        { PERSON_ID: 3918298, DISPLAY_FIRST_LAST: 'Josh Allen', TEAM_ABBREVIATION: 'BUF' },
+        { PERSON_ID: 4262921, DISPLAY_FIRST_LAST: 'Justin Jefferson', TEAM_ABBREVIATION: 'MIN' },
+        { PERSON_ID: 15847, DISPLAY_FIRST_LAST: 'Travis Kelce', TEAM_ABBREVIATION: 'KC' },
+        { PERSON_ID: 4241389, DISPLAY_FIRST_LAST: 'CeeDee Lamb', TEAM_ABBREVIATION: 'DAL' }
       ]);
     }
   }, [sport]);
@@ -377,7 +375,7 @@ export default function App() {
   useEffect(() => {
     const fetchScoreboard = async () => {
       try {
-        const endpoint = sport === 'NBA' ? '/api/scoreboard' : sport === 'MLB' ? '/api/mlb/scoreboard' : '/api/soccer/scoreboard';
+        const endpoint = sport === 'NBA' ? '/api/scoreboard' : sport === 'MLB' ? '/api/mlb/scoreboard' : '/api/nfl/scoreboard';
         const res = await axios.get(endpoint);
         setLiveGames(res.data || []);
       } catch (error: any) {
@@ -404,7 +402,7 @@ export default function App() {
           ? `/api/players/search?q=${encodeURIComponent(searchQuery)}` 
           : sport === 'MLB' 
             ? `/api/mlb/players/search?q=${encodeURIComponent(searchQuery)}`
-            : `/api/soccer/players/search?q=${encodeURIComponent(searchQuery)}`;
+            : `/api/nfl/players/search?q=${encodeURIComponent(searchQuery)}`;
         const res = await axios.get(endpoint);
         setSearchResults(res.data);
       } catch (error) {
@@ -449,9 +447,9 @@ export default function App() {
         setGames(gamelogRes.data);
         setStatus({ role: "MLB Player", injury_status: "Available" });
       } else {
-        const gamelogRes = await axios.get(`/api/soccer/players/${player.PERSON_ID}/gamelog`);
+        const gamelogRes = await axios.get(`/api/nfl/players/${player.PERSON_ID}/gamelog`);
         setGames(gamelogRes.data);
-        setStatus({ role: "Soccer Player", injury_status: "Available" });
+        setStatus({ role: "NFL Starter", injury_status: "Active" });
       }
     } catch (error) {
       console.error(`Error fetching ${sport} player data`, error);
@@ -477,7 +475,7 @@ export default function App() {
         })), null, 2);
       } else {
          analysisDataStr = JSON.stringify(games.slice(0, 10).map((g: any) => ({
-          Date: g.GAME_DATE, Matchup: g.MATCHUP, G: g.G, A: g.A, S: g.S, SOT: g.SOT, T: g.T, P: g.P, FS: g.FS, FC: g.FC, PTS: g.PTS
+          Date: g.GAME_DATE, Matchup: g.MATCHUP, PASS_YDS: g.PASS_YDS, RUSH_YDS: g.RUSH_YDS, REC_YDS: g.REC_YDS, REC: g.REC, PASS_TD: g.PASS_TD, TD: g.TD, CMP: g.CMP, PTS: g.PTS
         })), null, 2);
       }
 
@@ -683,15 +681,15 @@ export default function App() {
                     MLB
                   </button>
                   <button
-                    onClick={() => setSport('SOCCER')}
+                    onClick={() => setSport('NFL')}
                     className={cn(
                       "px-3 py-1.5 rounded text-[10px] font-black uppercase tracking-widest transition-all",
-                      sport === 'SOCCER' 
+                      sport === 'NFL' 
                         ? "bg-zinc-800 text-emerald-400 shadow-sm" 
                         : "text-zinc-500 hover:text-zinc-300"
                     )}
                   >
-                    SOCCER
+                    NFL
                   </button>
                 </div>
               </div>
@@ -875,7 +873,7 @@ export default function App() {
                         </div>
                         <input 
                           type="text" 
-                          placeholder={`Search any ${sport} player (e.g. ${sport === 'NBA' ? "'Jokic'" : "'Judge'"})...`}
+                          placeholder={`Search any ${sport} player (e.g. ${sport === 'NBA' ? "'Jokic'" : sport === 'MLB' ? "'Judge'" : "'Mahomes'"})...`}
                           value={searchQuery}
                           onChange={(e) => setSearchQuery(e.target.value)}
                           onFocus={() => setFocusedInput('hero')}
@@ -1026,7 +1024,9 @@ export default function App() {
                         <div className="w-full max-w-5xl px-4 pt-12">
                           <div className="flex items-center gap-3 mb-6">
                             <div className="w-1.5 h-5 bg-emerald-500 rounded-full" />
-                            <h3 className="text-sm font-black uppercase tracking-[0.2em] text-zinc-400">Live Scoreboard</h3>
+                            <h3 className="text-sm font-black uppercase tracking-[0.2em] text-zinc-400">
+                              {sport === 'NFL' ? '2026 NFL Season • Week 1 Live Scoreboard' : 'Live Scoreboard'}
+                            </h3>
                             <div className="flex items-center gap-2 ml-auto">
                               <span className="flex h-2 w-2 rounded-full bg-emerald-500 animate-pulse" />
                               <span className="text-[10px] font-bold text-emerald-500 uppercase tracking-widest">Live Updates</span>
@@ -1143,11 +1143,16 @@ export default function App() {
                             { id: 1641705, player: 'Victor Wembanyama', team: 'SAS', line: '21.5 PTS', proj: '24.8', edge: '+15.3%', high: true },
                             { id: 1631093, player: 'Chet Holmgren', team: 'OKC', line: '16.5 PTS', proj: '18.9', edge: '+14.5%', high: false },
                             { id: 1630170, player: 'Devin Vassell', team: 'SAS', line: '19.5 PTS', proj: '21.4', edge: '+9.7%', high: false }
-                          ] : [
+                          ] : sport === 'MLB' ? [
                             { id: 660271, player: 'Shohei Ohtani', team: 'LAD', line: '1.5 TB', proj: '2.3', edge: '+53.3%', high: true },
                             { id: 592450, player: 'Aaron Judge', team: 'NYY', line: '0.5 HR', proj: '0.7', edge: '+40.2%', high: true },
                             { id: 683002, player: 'Gunnar Henderson', team: 'BAL', line: '2.5 H+R+RBI', proj: '3.1', edge: '+24.5%', high: false },
                             { id: 605141, player: 'Mookie Betts', team: 'LAD', line: '1.5 H', proj: '1.8', edge: '+20.0%', high: false }
+                          ] : [
+                            { id: 3139477, player: 'Patrick Mahomes', team: 'KC', line: '275.5 PASS YDS', proj: '298.4', edge: '+8.3%', high: true },
+                            { id: 3916387, player: 'Lamar Jackson', team: 'BAL', line: '54.5 RUSH YDS', proj: '68.2', edge: '+25.1%', high: true },
+                            { id: 4262921, player: 'Justin Jefferson', team: 'MIN', line: '88.5 REC YDS', proj: '104.0', edge: '+17.5%', high: false },
+                            { id: 3929630, player: 'Saquon Barkley', team: 'PHI', line: '82.5 RUSH YDS', proj: '98.6', edge: '+19.5%', high: true }
                           ]).map((row, i) => (
                             <tr key={`comp-${i}`} className="hover:bg-zinc-800/20 transition-colors group">
                               <td className="px-6 py-5">
@@ -1206,7 +1211,9 @@ export default function App() {
                       <div className="flex items-center gap-3">
                         <div className="w-1.5 h-5 bg-emerald-500 rounded-full" />
                         <h3 className="text-sm font-black uppercase tracking-[0.2em] text-zinc-400">
-                          {sport === 'NBA' && new Date().getMonth() >= 3 && new Date().getMonth() <= 5 
+                          {sport === 'NFL'
+                            ? "2026 NFL Season: Week 1 Trending"
+                            : sport === 'NBA' && new Date().getMonth() >= 3 && new Date().getMonth() <= 5 
                             ? "NBA Postseason Trending" 
                             : "Quick Start: Trending Tonight"}
                         </h3>
@@ -1226,11 +1233,13 @@ export default function App() {
                         >
                           <div className="absolute top-0 right-0 w-12 h-12 bg-emerald-500/5 blur-xl rounded-full -mr-6 -mt-6" />
                           
-                          {/* Postseason Badge */}
+                          {/* Postseason / Week 1 Badge */}
                           <div className="absolute top-2 left-2 z-20">
                             <div className="bg-emerald-500/10 border border-emerald-500/20 rounded-full px-1.5 py-0.5 flex items-center gap-1 backdrop-blur-md">
                               <div className="w-1 h-1 bg-emerald-500 rounded-full animate-pulse" />
-                              <span className="text-[6px] font-black text-emerald-500 uppercase tracking-widest">PO 26</span>
+                              <span className="text-[6px] font-black text-emerald-500 uppercase tracking-widest">
+                                {sport === 'NFL' ? 'WK 1' : 'PO 26'}
+                              </span>
                             </div>
                           </div>
 
@@ -1266,7 +1275,12 @@ export default function App() {
                           {player.statistics?.seasonAverages && (
                             <div className="mt-2 flex items-center justify-center gap-1.5 opacity-0 group-hover:opacity-100 transition-opacity duration-300 transform translate-y-1 group-hover:translate-y-0 relative z-10">
                                <div className="h-px w-2 bg-emerald-500/30" />
-                               <span className="text-[9px] font-black text-emerald-500 font-mono">{player.statistics.seasonAverages.ppg} PPG</span>
+                               <span className="text-[9px] font-black text-emerald-500 font-mono">
+                                 {sport === 'NFL' 
+                                   ? (player.statistics.seasonAverages.passYds ? `${player.statistics.seasonAverages.passYds} PYDS` : player.statistics.seasonAverages.rushYds ? `${player.statistics.seasonAverages.rushYds} RYDS` : `${player.statistics.seasonAverages.recYds} RECYDS`)
+                                   : `${player.statistics.seasonAverages.ppg || player.statistics.seasonAverages.avg || '20+'} AVG`
+                                 }
+                               </span>
                                <div className="h-px w-2 bg-emerald-500/30" />
                             </div>
                           )}
@@ -1405,7 +1419,7 @@ export default function App() {
                         onChange={(e) => setStatCategory(e.target.value)}
                         className="bg-zinc-950/80 border border-zinc-800/80 rounded-2xl px-3 py-3 md:py-4 text-sm md:text-base font-bold text-zinc-100 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500/50 transition-all cursor-pointer"
                       >
-                        {(sport === 'NBA' ? defaultNbaCategories : sport === 'MLB' ? defaultMlbCategories : defaultSoccerCategories).map(cat => (
+                        {(sport === 'NBA' ? defaultNbaCategories : sport === 'MLB' ? defaultMlbCategories : defaultNflCategories).map(cat => (
                           <option key={cat} value={cat}>{cat}</option>
                         ))}
                       </select>
@@ -1587,7 +1601,7 @@ export default function App() {
               
               {/* Stat Selector */}
               <div className="bg-zinc-900/40 border border-zinc-800/60 rounded-2xl p-1.5 flex gap-2 overflow-x-auto custom-scrollbar">
-                {(sport === 'NBA' ? defaultNbaCategories : sport === 'MLB' ? defaultMlbCategories : defaultSoccerCategories).map(stat => (
+                {(sport === 'NBA' ? defaultNbaCategories : sport === 'MLB' ? defaultMlbCategories : defaultNflCategories).map(stat => (
                   <button
                     key={stat}
                     onClick={() => setStatCategory(stat)}
@@ -2392,38 +2406,79 @@ function TeamRoster({ team, name, sport, onSelectPlayer }: { team: any; name: st
 
             {/* Second Row: Season Averages */}
             <div className="flex items-center gap-4 bg-zinc-900/50 px-5 py-4 rounded-2xl border border-zinc-800/30 relative z-10 w-full justify-between">
-              <div className="flex flex-col">
-                <span className="text-2xl font-black text-emerald-400 leading-none">
-                  {sport === 'NBA' 
-                    ? (player.statistics?.seasonAverages?.ppg || '0.0') 
-                    : (player.statistics?.seasonAverages?.avg || '.000')}
-                </span>
-                <span className="text-[8px] font-bold text-zinc-500 uppercase tracking-widest mt-1">
-                  {sport === 'NBA' ? 'Points' : 'Avg'}
-                </span>
-              </div>
-              <div className="w-px h-8 bg-zinc-800/50" />
-              <div className="flex flex-col">
-                <span className="text-2xl font-black text-emerald-400 leading-none">
-                  {sport === 'NBA' 
-                    ? (player.statistics?.seasonAverages?.rpg || '0.0') 
-                    : (player.statistics?.seasonAverages?.hr || '0')}
-                </span>
-                <span className="text-[8px] font-bold text-zinc-500 uppercase tracking-widest mt-1">
-                  {sport === 'NBA' ? 'Rebounds' : 'Home Runs'}
-                </span>
-              </div>
-              <div className="w-px h-8 bg-zinc-800/50" />
-              <div className="flex flex-col">
-                <span className="text-2xl font-black text-emerald-400 leading-none">
-                  {sport === 'NBA' 
-                    ? (player.statistics?.seasonAverages?.apg || '0.0') 
-                    : (player.statistics?.seasonAverages?.rbi || '0')}
-                </span>
-                <span className="text-[8px] font-bold text-zinc-500 uppercase tracking-widest mt-1">
-                  {sport === 'NBA' ? 'Assists' : 'RBI'}
-                </span>
-              </div>
+              {sport === 'NFL' ? (
+                <>
+                  <div className="flex flex-col">
+                    <span className="text-2xl font-black text-emerald-400 leading-none">
+                      {player.position === 'QB' 
+                        ? (player.statistics?.seasonAverages?.passYds || '0') 
+                        : player.position === 'RB' 
+                          ? (player.statistics?.seasonAverages?.rushYds || '0')
+                          : (player.statistics?.seasonAverages?.recYds || '0')}
+                    </span>
+                    <span className="text-[8px] font-bold text-zinc-500 uppercase tracking-widest mt-1">
+                      {player.position === 'QB' ? 'Pass Yds' : player.position === 'RB' ? 'Rush Yds' : 'Rec Yds'}
+                    </span>
+                  </div>
+                  <div className="w-px h-8 bg-zinc-800/50" />
+                  <div className="flex flex-col">
+                    <span className="text-2xl font-black text-emerald-400 leading-none">
+                      {player.position === 'QB' 
+                        ? (player.statistics?.seasonAverages?.passTd || '0')
+                        : player.position === 'RB'
+                          ? (player.statistics?.seasonAverages?.recYds || '0')
+                          : (player.statistics?.seasonAverages?.rec || '0')}
+                    </span>
+                    <span className="text-[8px] font-bold text-zinc-500 uppercase tracking-widest mt-1">
+                      {player.position === 'QB' ? 'Pass TD' : player.position === 'RB' ? 'Rec Yds' : 'Receptions'}
+                    </span>
+                  </div>
+                  <div className="w-px h-8 bg-zinc-800/50" />
+                  <div className="flex flex-col">
+                    <span className="text-2xl font-black text-emerald-400 leading-none">
+                      {player.statistics?.seasonAverages?.td || '0'}
+                    </span>
+                    <span className="text-[8px] font-bold text-zinc-500 uppercase tracking-widest mt-1">
+                      Total TD
+                    </span>
+                  </div>
+                </>
+              ) : (
+                <>
+                  <div className="flex flex-col">
+                    <span className="text-2xl font-black text-emerald-400 leading-none">
+                      {sport === 'NBA' 
+                        ? (player.statistics?.seasonAverages?.ppg || '0.0') 
+                        : (player.statistics?.seasonAverages?.avg || '.000')}
+                    </span>
+                    <span className="text-[8px] font-bold text-zinc-500 uppercase tracking-widest mt-1">
+                      {sport === 'NBA' ? 'Points' : 'Avg'}
+                    </span>
+                  </div>
+                  <div className="w-px h-8 bg-zinc-800/50" />
+                  <div className="flex flex-col">
+                    <span className="text-2xl font-black text-emerald-400 leading-none">
+                      {sport === 'NBA' 
+                        ? (player.statistics?.seasonAverages?.rpg || '0.0') 
+                        : (player.statistics?.seasonAverages?.hr || '0')}
+                    </span>
+                    <span className="text-[8px] font-bold text-zinc-500 uppercase tracking-widest mt-1">
+                      {sport === 'NBA' ? 'Rebounds' : 'Home Runs'}
+                    </span>
+                  </div>
+                  <div className="w-px h-8 bg-zinc-800/50" />
+                  <div className="flex flex-col">
+                    <span className="text-2xl font-black text-emerald-400 leading-none">
+                      {sport === 'NBA' 
+                        ? (player.statistics?.seasonAverages?.apg || '0.0') 
+                        : (player.statistics?.seasonAverages?.rbi || '0')}
+                    </span>
+                    <span className="text-[8px] font-bold text-zinc-500 uppercase tracking-widest mt-1">
+                      {sport === 'NBA' ? 'Assists' : 'RBI'}
+                    </span>
+                  </div>
+                </>
+              )}
             </div>
 
             {/* Third Row: Rankings */}
@@ -2467,11 +2522,11 @@ function BoxScoreTable({ team, sport, onSelectPlayer }: { team: any, sport: Spor
           <thead>
             <tr className="bg-zinc-900/50 border-b border-zinc-800">
               <th className="px-4 py-3 text-[8px] font-black text-zinc-500 uppercase tracking-widest">Player</th>
-              <th className="px-4 py-3 text-[8px] font-black text-zinc-500 uppercase tracking-widest text-center">{sport === 'SOCCER' ? 'MINS' : 'MIN'}</th>
-              <th className="px-4 py-3 text-[8px] font-black text-zinc-500 uppercase tracking-widest text-center">{sport === 'NBA' ? 'PTS' : sport === 'MLB' ? 'AB' : 'G'}</th>
-              <th className="px-4 py-3 text-[8px] font-black text-zinc-500 uppercase tracking-widest text-center">{sport === 'NBA' ? 'REB' : sport === 'MLB' ? 'H' : 'A'}</th>
-              <th className="px-4 py-3 text-[8px] font-black text-zinc-500 uppercase tracking-widest text-center">{sport === 'NBA' ? 'AST' : sport === 'MLB' ? 'RBI' : 'S'}</th>
-              <th className="px-4 py-3 text-[8px] font-black text-zinc-500 uppercase tracking-widest text-center">{sport === 'SOCCER' ? 'SOT' : '+/-'}</th>
+              <th className="px-4 py-3 text-[8px] font-black text-zinc-500 uppercase tracking-widest text-center">{sport === 'NFL' ? 'SNAPS' : 'MIN'}</th>
+              <th className="px-4 py-3 text-[8px] font-black text-zinc-500 uppercase tracking-widest text-center">{sport === 'NBA' ? 'PTS' : sport === 'MLB' ? 'AB' : 'PASS'}</th>
+              <th className="px-4 py-3 text-[8px] font-black text-zinc-500 uppercase tracking-widest text-center">{sport === 'NBA' ? 'REB' : sport === 'MLB' ? 'H' : 'RUSH'}</th>
+              <th className="px-4 py-3 text-[8px] font-black text-zinc-500 uppercase tracking-widest text-center">{sport === 'NBA' ? 'AST' : sport === 'MLB' ? 'RBI' : 'REC'}</th>
+              <th className="px-4 py-3 text-[8px] font-black text-zinc-500 uppercase tracking-widest text-center">{sport === 'NFL' ? 'TD' : '+/-'}</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-zinc-800/50">
@@ -2498,10 +2553,10 @@ function BoxScoreTable({ team, sport, onSelectPlayer }: { team: any, sport: Spor
                   </div>
                 </td>
                 <td className="px-4 py-3 text-center text-[10px] font-mono text-zinc-500">{player.statistics?.minutes || '0'}</td>
-                <td className="px-4 py-3 text-center text-xs font-black font-mono text-zinc-100">{sport === 'NBA' ? (player.statistics?.points || 0) : sport === 'MLB' ? (player.statistics?.atBats || 0) : (player.statistics?.goals || 0)}</td>
-                <td className="px-4 py-3 text-center text-xs font-black font-mono text-zinc-300">{sport === 'NBA' ? (player.statistics?.reboundsTotal || 0) : sport === 'MLB' ? (player.statistics?.hits || 0) : (player.statistics?.assists || 0)}</td>
-                <td className="px-4 py-3 text-center text-xs font-black font-mono text-zinc-300">{sport === 'NBA' ? (player.statistics?.assists || 0) : sport === 'MLB' ? (player.statistics?.rbi || 0) : (player.statistics?.shots || 0)}</td>
-                <td className="px-4 py-3 text-center text-[10px] font-mono text-zinc-500">{sport === 'NBA' ? (player.statistics?.plusMinusPoints || 0) : sport === 'MLB' ? (player.statistics?.runs || 0) : (player.statistics?.shotsOnTarget || 0)}</td>
+                <td className="px-4 py-3 text-center text-xs font-black font-mono text-zinc-100">{sport === 'NBA' ? (player.statistics?.points || 0) : sport === 'MLB' ? (player.statistics?.atBats || 0) : (player.statistics?.passYds || 0)}</td>
+                <td className="px-4 py-3 text-center text-xs font-black font-mono text-zinc-300">{sport === 'NBA' ? (player.statistics?.reboundsTotal || 0) : sport === 'MLB' ? (player.statistics?.hits || 0) : (player.statistics?.rushYds || 0)}</td>
+                <td className="px-4 py-3 text-center text-xs font-black font-mono text-zinc-300">{sport === 'NBA' ? (player.statistics?.assists || 0) : sport === 'MLB' ? (player.statistics?.rbi || 0) : (player.statistics?.recYds || 0)}</td>
+                <td className="px-4 py-3 text-center text-[10px] font-mono text-zinc-500">{sport === 'NBA' ? (player.statistics?.plusMinusPoints || 0) : sport === 'MLB' ? (player.statistics?.runs || 0) : (player.statistics?.touchdowns || 0)}</td>
               </tr>
             ))}
           </tbody>
@@ -2715,6 +2770,14 @@ function ParlaySlip({ slip, onClose, onRemove, onAdd, sport }: { slip: FavoriteP
         reason: 'Elite lob connection. LeBron assists are heavily skewed towards AD finishes.'
       };
     }
+    if (prop.player.DISPLAY_FIRST_LAST.includes('Mahomes') && (prop.statCategory === 'PASS_YDS' || prop.statCategory === 'PASS_TD')) {
+      return {
+        player: 'Travis Kelce',
+        stat: 'REC_YDS',
+        target: 65.5,
+        reason: 'Primary red-zone and 3rd down target. Mahomes passing volume strongly correlates with Kelce yards.'
+      };
+    }
     return null;
   };
 
@@ -2891,7 +2954,7 @@ function FavoritesView({ favorites, setFavorites, sport }: { favorites: Favorite
     setTimeout(() => setCopiedId(null), 2000);
   };
 
-  const validCategories = sport === 'NBA' ? defaultNbaCategories : sport === 'MLB' ? defaultMlbCategories : defaultSoccerCategories;
+  const validCategories = sport === 'NBA' ? defaultNbaCategories : sport === 'MLB' ? defaultMlbCategories : defaultNflCategories;
   const filteredFavs = favorites.filter(fav => validCategories.includes(fav.statCategory));
 
   if (filteredFavs.length === 0) {
@@ -3268,7 +3331,8 @@ function ScreenshotImporter({ onPlayerSelect, setActiveTab, sport }: { onPlayerS
 }
 
 const statLabels: Record<string, string> = {
-  TB: 'Total Bases', H_R_RBI: 'H+R+RBI', SO: 'Strikeouts', PTS: 'Points', REB: 'Rebounds', AST: 'Assists'
+  TB: 'Total Bases', H_R_RBI: 'H+R+RBI', SO: 'Strikeouts', PTS: 'Points', REB: 'Rebounds', AST: 'Assists',
+  PASS_YDS: 'Pass Yds', RUSH_YDS: 'Rush Yds', REC_YDS: 'Rec Yds', REC: 'Receptions', PASS_TD: 'Pass TDs', TD: 'Anytime TD', CMP: 'Completions'
 };
 
 function OptimizerView({ favorites, setFavorites, setActiveTab, sport, seasonStatus }: { favorites: FavoriteProp[], setFavorites: React.Dispatch<React.SetStateAction<FavoriteProp[]>>, setActiveTab: (tab: any) => void, sport: Sport, seasonStatus: Record<string, { active: boolean; resumes: string }> | null }) {
@@ -3325,7 +3389,7 @@ function OptimizerView({ favorites, setFavorites, setActiveTab, sport, seasonSta
     });
     setGenSaved(true);
   };
-  const validCategories = sport === 'NBA' ? defaultNbaCategories : sport === 'MLB' ? defaultMlbCategories : defaultSoccerCategories;
+  const validCategories = sport === 'NBA' ? defaultNbaCategories : sport === 'MLB' ? defaultMlbCategories : defaultNflCategories;
   const filteredFavs = favorites.filter(fav => fav.sport === sport && validCategories.includes(fav.statCategory));
   const sortedFavs = [...filteredFavs].sort((a, b) => b.hitRate - a.hitRate);
 
