@@ -309,7 +309,7 @@ export default function App() {
   useEffect(() => {
     localStorage.setItem('lockai-favorites', JSON.stringify(favorites));
   }, [favorites]);
-  const [activeTab, setActiveTab] = useState<'home' | 'favorites' | 'optimizer' | 'autoProps' | 'import' | 'tos'>('home');
+  const [activeTab, setActiveTab] = useState<'home' | 'favorites' | 'optimizer' | 'import' | 'tos'>('home');
 
   // Season availability — off-season sports show an unavailable notice instead of fake data
   const [seasonStatus, setSeasonStatus] = useState<Record<string, { active: boolean; resumes: string }> | null>(null);
@@ -646,12 +646,6 @@ export default function App() {
             label="Optimizer"
           />
           <SidebarIcon
-            icon={Calculator}
-            active={activeTab === 'autoProps'}
-            onClick={() => { setActiveTab('autoProps'); setSport('NBA'); setSelectedPlayer(null); }}
-            label="NBA Props"
-          />
-          <SidebarIcon
             icon={Bookmark} 
             active={activeTab === 'favorites'} 
             onClick={() => setActiveTab('favorites')} 
@@ -859,9 +853,7 @@ export default function App() {
               </>
             )}
 
-            {activeTab === 'autoProps' ? (
-              <AutoNbaPropsView />
-            ) : activeTab === 'favorites' ? (
+            {activeTab === 'favorites' ? (
               <FavoritesView favorites={favorites} setFavorites={setFavorites} sport={sport} />
             ) : activeTab === 'optimizer' ? (
               <OptimizerView favorites={favorites} setFavorites={setFavorites} setActiveTab={setActiveTab} sport={sport} seasonStatus={seasonStatus} />
@@ -1890,7 +1882,25 @@ function AutoNbaPropsView() {
   );
 }
 
-function SimulationView({ gameId, sport }: { gameId: string, sport: Sport }) {
+function SimulationView({ gameId, sport, homeCode, awayCode }: { gameId: string, sport: Sport, homeCode?: string, awayCode?: string }) {
+  const [playerProps, setPlayerProps] = useState<any>(null);
+  const [propsLoading, setPropsLoading] = useState(false);
+  const loadProps = async () => {
+    if (sport !== 'NBA') return;
+    setPropsLoading(true);
+    try {
+      const response = await axios.get('/api/nba/auto-props');
+      setPlayerProps(response.data);
+    } catch { setPlayerProps({ error: 'Could not load player prop simulations.' }); }
+    finally { setPropsLoading(false); }
+  };
+  useEffect(() => { setPlayerProps(null); loadProps(); }, [gameId, sport]);
+  const matchupProps = (playerProps?.props || []).filter((p: any) => p.team === homeCode || p.team === awayCode);
+  const stars = Array.from(new Map(matchupProps.filter((p: any) => p.category === 'PTS')
+    .sort((a: any, b: any) => b.projected - a.projected).slice(0, 8)
+    .map((p: any) => [p.playerId, p])).keys());
+  const featuredProps = matchupProps.filter((p: any) => stars.includes(p.playerId));
+
   const [result, setResult] = useState<any>(null);
   const [loading, setLoading] = useState(false);
 
@@ -2007,6 +2017,34 @@ function SimulationView({ gameId, sport }: { gameId: string, sport: Sport }) {
           </div>
         </div>
       </div>
+
+      {sport === 'NBA' && (
+        <div className="rounded-3xl border border-zinc-800 bg-zinc-900/40 p-6 space-y-4">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <h4 className="text-sm font-black uppercase tracking-widest text-zinc-100">Star Player Prop Simulations</h4>
+              <p className="text-xs text-zinc-500 mt-1">Automatically simulates featured players in this matchup — no searching.</p>
+            </div>
+            <button onClick={loadProps} disabled={propsLoading} className="rounded-lg bg-zinc-800 px-3 py-2 text-xs font-bold text-emerald-400 disabled:opacity-50">Refresh Props</button>
+          </div>
+          {propsLoading ? <p className="text-zinc-400 text-xs">Simulating player props...</p> :
+            playerProps?.error ? <p className="text-red-400 text-xs">{playerProps.error}</p> :
+            featuredProps.length === 0 ? <p className="text-zinc-400 text-xs">No eligible player projections available for this matchup yet.</p> :
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              {featuredProps.map((p: any) => (
+                <div key={p.playerId + '-' + p.category} className="rounded-xl border border-zinc-800 bg-zinc-950/50 p-4">
+                  <div className="font-bold text-zinc-100 text-sm">{p.playerName} <span className="text-zinc-500 text-xs">{p.team}</span></div>
+                  <div className="text-xs text-zinc-400 mt-1">{p.category} · estimated line {p.line} · projection {p.projected}</div>
+                  <div className="flex justify-between mt-3 text-xs font-black">
+                    <span className="text-emerald-400">Over {(p.overProb * 100).toFixed(1)}%</span>
+                    <span className="text-sky-400">Under {(p.underProb * 100).toFixed(1)}%</span>
+                  </div>
+                </div>
+              ))}
+            </div>}
+          <p className="text-[10px] text-amber-400">{playerProps?.note || 'Illustrative estimates only; not sportsbook odds or verified predictive probabilities.'}</p>
+        </div>
+      )}
 
       {/* Total runs distribution */}
       <div className="bg-zinc-900/40 border border-zinc-800/60 rounded-3xl p-6 space-y-4">
@@ -2218,7 +2256,7 @@ function GameCenter({ gameId, onClose, sport, onSelectPlayer }: { gameId: string
           )}
 
           {activeTab === 'sim' && (
-            <SimulationView gameId={gameId} sport={sport} />
+            <SimulationView gameId={gameId} sport={sport} homeCode={homeTeam?.teamTricode} awayCode={awayTeam?.teamTricode} />
           )}
 
           {activeTab === 'ai' && (
