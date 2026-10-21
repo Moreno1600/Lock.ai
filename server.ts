@@ -11,7 +11,12 @@ import { getNflRosterForTeam, NFL_TEAM_ROSTERS } from "./nflRosters.js";
 dotenv.config();
 
 const PORT = 3000;
-const CURRENT_SEASON = "2025-26"; // Update as needed
+// NBA season rolls over in October; avoid serving the previous roster each fall.
+const nbaSeason = (date = new Date()) => {
+  const year = date.getFullYear() - (date.getMonth() < 9 ? 1 : 0);
+  return `${year}-${String(year + 1).slice(-2)}`;
+};
+const CURRENT_SEASON = nbaSeason();
 
 // Season calendars — when a sport is in its off-season, endpoints return empty
 // data and the UI shows an "unavailable" notice instead of mock games.
@@ -238,55 +243,41 @@ let playersCache: any[] = [
   { PERSON_ID: 1642267, DISPLAY_FIRST_LAST: "Matas Buzelis", TEAM_ABBREVIATION: "CHI", TEAM_ID: 1610612741 }
 ];
 
-let isFetchingPlayers = false;
+let rosterLoadedAt = 0;
+let rosterLoadPromise: Promise<any[]> | null = null;
+let rosterError: string | null = null;
+const ROSTER_TTL_MS = 6 * 60 * 60 * 1000;
 
-async function fetchPlayers() {
-  // If we have more than the fallback count, we've already successfully fetched from API
-  if (playersCache.length > 30) return playersCache;
-  if (isFetchingPlayers) return playersCache;
-  
-  isFetchingPlayers = true;
-  let attempts = 0;
-  const maxAttempts = 1; // Only try once to avoid cluttering logs if API is blocked
-  
-  while (attempts < maxAttempts) {
+async function fetchPlayers(): Promise<any[]> {
+  if (rosterLoadedAt && Date.now() - rosterLoadedAt < ROSTER_TTL_MS) return playersCache;
+  if (rosterLoadPromise) return rosterLoadPromise;
+  rosterLoadPromise = (async () => {
     try {
-      const response = await axios.get(
-        `https://stats.nba.com/stats/commonallplayers?IsOnlyCurrentSeason=0&LeagueID=00&Season=${CURRENT_SEASON}`,
-        { headers: nbaHeaders, timeout: 5000 } // Reduced timeout
+      const response = await fetchWithRetry(
+        `https://stats.nba.com/stats/commonallplayers?IsOnlyCurrentSeason=1&LeagueID=00&Season=${CURRENT_SEASON}`,
+        nbaHeaders
       );
-      const data = response.data;
-      const headers = data.resultSets[0].headers;
-      const rows = data.resultSets[0].rowSet;
-      
-      const allPlayers = rows.map((row: any[]) => {
+      const result = response.data?.resultSets?.[0];
+      if (!Array.isArray(result?.headers) || !Array.isArray(result?.rowSet)) throw new Error("Invalid NBA roster response");
+      const players = result.rowSet.map((row: any[]) => {
         const player: any = {};
-        headers.forEach((header: string, index: number) => {
-          player[header] = row[index];
-        });
+        result.headers.forEach((header: string, index: number) => { player[header] = row[index]; });
         return player;
-      });
-      
-      // Filter for active players only
-      playersCache = allPlayers.filter((p: any) => p.ROSTERSTATUS === 1);
-      
-      isFetchingPlayers = false;
+      }).filter((p: any) => Number(p.ROSTERSTATUS) === 1 && Number(p.PERSON_ID) > 0 && p.DISPLAY_FIRST_LAST);
+      if (players.length < 300) throw new Error(`Incomplete NBA roster: ${players.length} players`);
+      playersCache = [...new Map(players.map((p: any) => [Number(p.PERSON_ID), p])).values()] as typeof playersCache;
+      rosterLoadedAt = Date.now();
+      rosterError = null;
       return playersCache;
     } catch (error: any) {
-      attempts++;
-      // Log as info since we have a robust fallback, making it less "error-like"
-      console.info(`NBA API background sync deferred: ${error.message}. Using optimized local cache.`);
-      
-      if (attempts >= maxAttempts) {
-        isFetchingPlayers = false;
-        return playersCache;
-      }
-      
-      await new Promise(resolve => setTimeout(resolve, 500));
-    }
-  }
-  isFetchingPlayers = false;
-  return playersCache;
+      rosterError = error.message;
+      console.warn(`Current NBA roster unavailable: ${rosterError}`);
+      // Never silently present outdated fallback entries as verified active players.
+      if (rosterLoadedAt) return playersCache;
+      throw new Error("Current NBA roster unavailable. Please retry.");
+    } finally { rosterLoadPromise = null; }
+  })();
+  return rosterLoadPromise;
 }
 
 // Helper to get realistic statistics for players in rosters
@@ -535,31 +526,30 @@ async function startServer() {
 
   // 1. Search Players
   app.get("/api/players/search", async (req, res) => {
-    const query = (req.query.q as string || "").toLowerCase();
-    
-    // Get base results
-    let matches = [];
-    if (!query || query === 'a' || query === 'e' || query === 'i' || query === 'o') {
-      // Return a set of top players for "trending" if query is generic or empty
-      matches = playersCache.slice(0, 12);
-    } else {
-      matches = playersCache.filter(p => p.DISPLAY_FIRST_LAST.toLowerCase().includes(query)).slice(0, 10);
+    try {
+      const roster = await fetchPlayers();
+      const query = String(req.query.q || "").trim().toLocaleLowerCase();
+      const limit = Math.min(1000, Math.max(1, Number(req.query.limit) || 30));
+      const matches = query
+        ? roster.filter(p => p.DISPLAY_FIRST_LAST.toLocaleLowerCase().includes(query))
+        : roster;
+      res.json(matches.slice(0, limit).map(player => ({
+        ...player,
+        statistics: getStatsWithAverages(player.PERSON_ID, player.DISPLAY_FIRST_LAST)
+      })));
+      if (!Object.keys(seasonAveragesCache).length) fetchSeasonAverages().catch(console.error);
+    } catch (error: any) {
+      res.status(503).json({ error: error.message, season: CURRENT_SEASON });
     }
+  });
 
-    // Attach statistics to search results so they show up in trending/search UI
-    const resultsWithStats = matches.map(player => ({
-      ...player,
-      statistics: getStatsWithAverages(player.PERSON_ID, player.DISPLAY_FIRST_LAST)
-    }));
-    
-    res.json(resultsWithStats);
-    
-    // Trigger background fetches if needed, but don't await them
-    if (playersCache.length <= 30 && !isFetchingPlayers) {
-      fetchPlayers().catch(console.error);
-    }
-    if (Object.keys(seasonAveragesCache).length === 0) {
-      fetchSeasonAverages().catch(console.error);
+  app.get("/api/nba/roster-health", async (_req, res) => {
+    try {
+      const roster = await fetchPlayers();
+      res.json({ season: CURRENT_SEASON, count: roster.length, teams: new Set(roster.map(p => p.TEAM_ID)).size,
+        updatedAt: new Date(rosterLoadedAt).toISOString(), source: "NBA commonallplayers", complete: roster.length >= 300 });
+    } catch (error: any) {
+      res.status(503).json({ season: CURRENT_SEASON, complete: false, error: error.message, lastError: rosterError });
     }
   });
 
