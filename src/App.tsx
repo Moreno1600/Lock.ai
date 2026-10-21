@@ -309,7 +309,7 @@ export default function App() {
   useEffect(() => {
     localStorage.setItem('lockai-favorites', JSON.stringify(favorites));
   }, [favorites]);
-  const [activeTab, setActiveTab] = useState<'home' | 'favorites' | 'optimizer' | 'import' | 'tos'>('home');
+  const [activeTab, setActiveTab] = useState<'home' | 'favorites' | 'optimizer' | 'autoProps' | 'import' | 'tos'>('home');
 
   // Season availability — off-season sports show an unavailable notice instead of fake data
   const [seasonStatus, setSeasonStatus] = useState<Record<string, { active: boolean; resumes: string }> | null>(null);
@@ -646,6 +646,12 @@ export default function App() {
             label="Optimizer"
           />
           <SidebarIcon
+            icon={Calculator}
+            active={activeTab === 'autoProps'}
+            onClick={() => { setActiveTab('autoProps'); setSport('NBA'); setSelectedPlayer(null); }}
+            label="NBA Props"
+          />
+          <SidebarIcon
             icon={Bookmark} 
             active={activeTab === 'favorites'} 
             onClick={() => setActiveTab('favorites')} 
@@ -853,7 +859,9 @@ export default function App() {
               </>
             )}
 
-            {activeTab === 'favorites' ? (
+            {activeTab === 'autoProps' ? (
+              <AutoNbaPropsView />
+            ) : activeTab === 'favorites' ? (
               <FavoritesView favorites={favorites} setFavorites={setFavorites} sport={sport} />
             ) : activeTab === 'optimizer' ? (
               <OptimizerView favorites={favorites} setFavorites={setFavorites} setActiveTab={setActiveTab} sport={sport} seasonStatus={seasonStatus} />
@@ -1840,6 +1848,46 @@ export default function App() {
     </div>
   </div>
 );
+}
+
+function AutoNbaPropsView() {
+  const [data, setData] = useState<any>(null);
+  const [loading, setLoading] = useState(true);
+  const [category, setCategory] = useState('ALL');
+  const load = async () => {
+    setLoading(true);
+    try { setData((await axios.get('/api/nba/auto-props')).data); }
+    catch { setData({ error: 'Could not load automatic NBA props.' }); }
+    finally { setLoading(false); }
+  };
+  useEffect(() => { load(); }, []);
+  const props = (data?.props || []).filter((p: any) => category === 'ALL' || p.category === category);
+  return (
+    <div className="space-y-6">
+      <div className="flex flex-wrap justify-between items-center gap-3">
+        <div><h2 className="text-3xl font-black text-zinc-100">NBA Player Prop Simulations</h2>
+          <p className="text-xs text-zinc-500 mt-2">Automatically scans players in today's upcoming NBA games. No player selection needed.</p></div>
+        <button onClick={load} disabled={loading} className="bg-emerald-500 text-zinc-950 font-bold rounded-xl px-4 py-2 disabled:opacity-50">Refresh simulations</button>
+      </div>
+      <div className="flex flex-wrap gap-2">{['ALL','PTS','REB','AST','PRA'].map(c =>
+        <button key={c} onClick={() => setCategory(c)} className={cn('rounded-lg px-3 py-2 text-xs font-bold',category === c ? 'bg-emerald-500 text-zinc-950' : 'bg-zinc-800 text-zinc-300')}>{c}</button>
+      )}</div>
+      {loading ? <p className="text-zinc-400">Simulating player props...</p> : data?.error || data?.unavailable ? <p className="text-red-400">{data.error || data.reason}</p> : <>
+        <p className="text-xs text-amber-400">{data?.note}</p>
+        {!props.length && <p className="text-zinc-400">No eligible players found on today's slate.</p>}
+        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+          {props.map((p: any) => <div key={p.playerId + '-' + p.category} className="rounded-2xl border border-zinc-800 bg-zinc-900/60 p-4 space-y-3">
+            <div><div className="font-bold text-zinc-100">{p.playerName}</div><div className="text-xs text-zinc-500">{p.team} {p.matchup} · {p.category} {p.line}</div></div>
+            <div className="grid grid-cols-2 gap-3">
+              <div><div className="text-[10px] text-zinc-500">OVER</div><div className="text-xl font-black text-emerald-400">{(p.overProb * 100).toFixed(1)}%</div></div>
+              <div><div className="text-[10px] text-zinc-500">UNDER</div><div className="text-xl font-black text-sky-400">{(p.underProb * 100).toFixed(1)}%</div></div>
+            </div>
+            <div className="text-xs text-zinc-400">Projected: {p.projected} · {p.sims.toLocaleString()} simulations</div>
+          </div>)}
+        </div>
+      </>}
+    </div>
+  );
 }
 
 function SimulationView({ gameId, sport }: { gameId: string, sport: Sport }) {
