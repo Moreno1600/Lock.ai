@@ -356,6 +356,7 @@ export default function App() {
   const isRLM = publicOverPct > 60 && lineMovement < 0;
 
   const searchTimeout = useRef<NodeJS.Timeout | null>(null);
+  const [playerSearchError, setPlayerSearchError] = useState<string | null>(null);
   const [trendingPlayers, setTrendingPlayers] = useState<Player[]>([]);
   const [liveGames, setLiveGames] = useState<any[]>([]);
 
@@ -408,6 +409,7 @@ export default function App() {
 
   useEffect(() => {
     if (!searchQuery.trim()) {
+      setPlayerSearchError(null);
       setSearchResults([]);
       return;
     }
@@ -416,6 +418,7 @@ export default function App() {
 
     searchTimeout.current = setTimeout(async () => {
       setIsSearching(true);
+      setPlayerSearchError(null);
       try {
         const endpoint = sport === 'NBA' 
           ? `/api/players/search?q=${encodeURIComponent(searchQuery)}` 
@@ -423,8 +426,10 @@ export default function App() {
             ? `/api/mlb/players/search?q=${encodeURIComponent(searchQuery)}`
             : `/api/nfl/players/search?q=${encodeURIComponent(searchQuery)}`;
         const res = await axios.get(endpoint);
-        setSearchResults(res.data);
-      } catch (error) {
+        setSearchResults(Array.isArray(res.data) ? res.data : []);
+      } catch (error: any) {
+        setSearchResults([]);
+        setPlayerSearchError(error.response?.data?.error || "Player roster unavailable. Please retry.");
         console.error("Search error", error);
       } finally {
         setIsSearching(false);
@@ -733,7 +738,8 @@ export default function App() {
               
               {searchResults.length > 0 && focusedInput === 'header' && (
                 <div className="absolute top-full mt-2 w-full max-w-xl bg-zinc-900 border border-zinc-800 rounded-2xl shadow-2xl overflow-hidden z-50 animate-in fade-in slide-in-from-top-2 duration-200">
-                  {searchResults.map(player => (
+                  {playerSearchError && <p className="px-4 py-2 text-xs text-red-400">{playerSearchError}</p>}
+              {searchResults.map(player => (
                     <button
                       key={player.PERSON_ID}
                       onClick={() => {
