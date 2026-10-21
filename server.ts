@@ -1106,26 +1106,67 @@ async function startServer() {
       await fetchPlayers();
       await fetchSeasonAverages();
       const props: any[] = [];
-      const normal = () => Math.sqrt(-2 * Math.log(Math.max(Number.EPSILON, Math.random()))) * Math.cos(2 * Math.PI * Math.random());
       const eligible = playersCache.filter(p => matchups.has(Number(p.TEAM_ID)) && seasonAveragesCache[p.PERSON_ID])
-        .sort((a, b) => Number(seasonAveragesCache[b.PERSON_ID]?.ppg || 0) - Number(seasonAveragesCache[a.PERSON_ID]?.ppg || 0)).slice(0, 32);
-      for (const p of eligible) {
-        const av = seasonAveragesCache[p.PERSON_ID];
-        for (const [category, mean] of [["PTS", Number(av.ppg)], ["REB", Number(av.rpg)], ["AST", Number(av.apg)], ["PRA", Number(av.ppg) + Number(av.rpg) + Number(av.apg)]] as [string, number][]) {
-          if (!Number.isFinite(mean) || mean <= 0) continue;
-          const line = Math.max(0.5, Math.floor(mean) + 0.5);
-          const sd = Math.max(1.5, Math.sqrt(mean) * (category === "PTS" || category === "PRA" ? 2.0 : 1.5));
-          let over = 0, sum = 0;
-          const sims = 10000;
-          for (let i = 0; i < sims; i++) {
-            const value = Math.max(0, Math.round(mean + sd * normal()));
-            sum += value;
-            if (value > line) over++;
-          }
-          props.push({ playerId: p.PERSON_ID, playerName: p.DISPLAY_FIRST_LAST, team: p.TEAM_ABBREVIATION, matchup: matchups.get(Number(p.TEAM_ID)), category, line, overProb: Number((over / sims).toFixed(3)), underProb: Number((1 - over / sims).toFixed(3)), projected: Number((sum / sims).toFixed(1)), sims });
+        .sort((a, b) => Number(seasonAveragesCache[b.PERSON_ID]?.ppg || 0) - Number(seasonAveragesCache[a.PERSON_ID]?.ppg || 0)).slice(0, 16);
+      const currentStart = Number(CURRENT_SEASON.split("-")[0]);
+      const seasons = [0, 1, 2].map(n => `${currentStart - n}-${String(currentStart - n + 1).slice(-2)}`);
+      const loadHistory = async (playerId: number) => {
+        const history: any[] = [];
+        for (const [age, season] of seasons.entries()) {
+          try {
+            const response = await fetchWithRetry(
+              `https://stats.nba.com/stats/playergamelog?PlayerID=${playerId}&Season=${season}&SeasonType=Regular%20Season`,
+              nbaHeaders
+            );
+            const set = response.data?.resultSets?.[0];
+            if (!set?.rowSet?.length) continue;
+            const headers: string[] = set.headers;
+            for (const row of set.rowSet.slice(0, age === 0 ? 30 : 45)) {
+              const g: any = { age, season };
+              headers.forEach((key, i) => { g[key] = row[i]; });
+              if (Number.isFinite(Number(g.PTS)) && Number.isFinite(Number(g.REB)) && Number.isFinite(Number(g.AST))) history.push(g);
+            }
+          } catch (e: any) { console.warn(`Historical logs unavailable for ${playerId}, ${season}: ${e.message}`); }
         }
+        return history;
+      };
+      // Bound concurrency so the stats provider is not flooded by a full slate.
+      for (let offset = 0; offset < eligible.length; offset += 3) {
+        await Promise.all(eligible.slice(offset, offset + 3).map(async p => {
+          const history = await loadHistory(Number(p.PERSON_ID));
+          if (history.length < 8) return; // Do not fabricate projections without a sample.
+          const weights = history.map(g => g.age === 0 ? 5 : g.age === 1 ? 2 : 1);
+          const totalWeight = weights.reduce((a, b) => a + b, 0);
+          const sample = () => {
+            let r = Math.random() * totalWeight;
+            for (let i = 0; i < history.length; i++) { r -= weights[i]; if (r <= 0) return history[i]; }
+            return history[history.length - 1];
+          };
+          for (const category of ["PTS", "REB", "AST", "PRA", "3PM"]) {
+            const valueOf = (g: any) => category === "PRA" ? Number(g.PTS) + Number(g.REB) + Number(g.AST)
+              : category === "3PM" ? Number(g.FG3M) : Number(g[category]);
+            const values = history.map(valueOf).filter(Number.isFinite);
+            if (values.length < 8) continue;
+            const mean = values.reduce((a, b) => a + b, 0) / values.length;
+            const line = Math.max(0.5, Math.floor(mean) + 0.5);
+            let over = 0, sum = 0;
+            const sims = 10000;
+            for (let i = 0; i < sims; i++) {
+              const v = valueOf(sample());
+              sum += v;
+              if (v > line) over++;
+            }
+            props.push({ playerId: p.PERSON_ID, playerName: p.DISPLAY_FIRST_LAST,
+              team: p.TEAM_ABBREVIATION, matchup: matchups.get(Number(p.TEAM_ID)),
+              category, line, overProb: Number((over / sims).toFixed(3)),
+              underProb: Number((1 - over / sims).toFixed(3)),
+              projected: Number((sum / sims).toFixed(1)), sims,
+              sampleGames: history.length, seasons: [...new Set(history.map(g => g.season))],
+              methodology: "Recency-weighted historical game-log bootstrap" });
+          }
+        }));
       }
-      return res.json({ props, note: "Illustrative model based on available season averages and assumed variance. Lines are generated estimates, NOT sportsbook lines. Not calibrated for injuries, opponents, minutes or correlations." });
+      return res.json({ props, note: "Historical NBA regular-season game logs from up to 3 seasons, weighted toward the current season (5:2:1). At least 8 verified games required. Generated lines are NOT sportsbook lines. Injury/news status, opponent adjustments, projected minutes and correlated outcomes are NOT yet modeled. Missing data means no prediction." });
     } catch (e: any) {
       console.error("Auto NBA props failed:", e.message);
       return res.status(503).json({ error: "Unable to load NBA player projections right now." });
