@@ -939,8 +939,63 @@ async function startServer() {
     const sims = Math.min(20000, Math.max(1000, parseInt(String(req.query.sims), 10) || 10000));
 
     const status: any = getSeasonStatus();
+    if (sport === "NBA") {
+      if (!status.NBA.active) return res.json({ unavailable: true, sport, resumes: status.NBA.resumes });
+      try {
+        const response = await axios.get("https://cdn.nba.com/static/json/liveData/scoreboard/todaysScoreboard_00.json", { timeout: 10000, headers: cdnHeaders });
+        const game = (response.data?.scoreboard?.games || []).find((g: any) => String(g.gameId) === String(req.params.gameId));
+        if (!game) return res.status(404).json({ error: "NBA game not found on today's scoreboard." });
+        if (Number(game.gameStatus) === 3) return res.json({ unavailable: true, sport, reason: "This game is final; simulations are for upcoming or live matchups." });
+        // Early-season baseline: use current team records as a modest strength adjustment.
+        // Not a calibrated betting model; do not treat probabilities as sportsbook odds.
+        const strength = (team: any) => {
+          const wins = Number(team.wins) || 0;
+          const losses = Number(team.losses) || 0;
+          return wins + losses ? (wins / (wins + losses) - 0.5) * 12 : 0;
+        };
+        const homeMean = 113 + strength(game.homeTeam) + 1.5;
+        const awayMean = 113 + strength(game.awayTeam);
+        const normal = () => Math.sqrt(-2 * Math.log(Math.max(Number.EPSILON, Math.random()))) * Math.cos(2 * Math.PI * Math.random());
+        let homeWins = 0, homePoints = 0, awayPoints = 0, homeCovers = 0;
+        const totalsCounts: Record<number, number> = {};
+        const scoreCounts: Record<string, number> = {};
+        for (let i = 0; i < sims; i++) {
+          let h = Math.max(0, Math.round(homeMean + 12 * normal()));
+          let a = Math.max(0, Math.round(awayMean + 12 * normal()));
+          while (h === a) { h += Math.max(0, Math.round(3 + 3 * normal())); a += Math.max(0, Math.round(3 + 3 * normal())); if (h === a) h++; }
+          if (h > a) homeWins++;
+          if (h - a >= 2) homeCovers++;
+          homePoints += h; awayPoints += a;
+          const total = h + a;
+          totalsCounts[total] = (totalsCounts[total] || 0) + 1;
+          const score = `${a}-${h}`;
+          scoreCounts[score] = (scoreCounts[score] || 0) + 1;
+        }
+        const totals = [209.5, 219.5, 229.5, 239.5, 249.5].map(line => ({
+          line, overProb: Number((Object.entries(totalsCounts).reduce((n, [t, count]) => n + (Number(t) > line ? count : 0), 0) / sims).toFixed(3))
+        }));
+        const distribution = Object.entries(totalsCounts).reduce((bins: Record<number, number>, [t, count]) => {
+          const bucket = Math.floor(Number(t) / 5) * 5;
+          bins[bucket] = (bins[bucket] || 0) + count;
+          return bins;
+        }, {});
+        const topScore = Object.entries(scoreCounts).sort((a, b) => b[1] - a[1])[0];
+        return res.json({
+          sport, sims, modelNote: "Illustrative early-season model using team win-loss records and league-neutral scoring assumptions; not calibrated betting probabilities.",
+          home: { teamId: game.homeTeam.teamId, tricode: game.homeTeam.teamTricode, winProb: Number((homeWins / sims).toFixed(3)), projRuns: Number((homePoints / sims).toFixed(1)) },
+          away: { teamId: game.awayTeam.teamId, tricode: game.awayTeam.teamTricode, winProb: Number(((sims - homeWins) / sims).toFixed(3)), projRuns: Number((awayPoints / sims).toFixed(1)) },
+          runLine: { homeMinus15: Number((homeCovers / sims).toFixed(3)), awayPlus15: Number(((sims - homeCovers) / sims).toFixed(3)) },
+          totals,
+          distribution: Object.entries(distribution).map(([total, count]) => ({ total: Number(total), pct: Number((count / sims * 100).toFixed(1)) })).sort((a, b) => a.total - b.total),
+          mostCommonScore: topScore ? { score: topScore[0], pct: Number((topScore[1] / sims * 100).toFixed(1)) } : null
+        });
+      } catch (e: any) {
+        console.error("NBA simulation failed:", e.message);
+        return res.status(503).json({ error: "Could not load NBA game data for simulation." });
+      }
+    }
     if (sport !== "MLB") {
-      return res.json({ unavailable: true, sport, reason: sport === "NBA" ? `NBA simulations return ${status.NBA.resumes}.` : "Simulations are MLB-only for now." });
+      return res.json({ unavailable: true, sport, reason: "Simulations are not yet supported for this sport." });
     }
     if (!status.MLB.active) {
       return res.json({ unavailable: true, sport, resumes: status.MLB.resumes });
