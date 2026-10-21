@@ -253,9 +253,9 @@ async function fetchPlayers(): Promise<any[]> {
   if (rosterLoadPromise) return rosterLoadPromise;
   rosterLoadPromise = (async () => {
     try {
-      const response = await fetchWithRetry(
+      const response = await axios.get(
         `https://stats.nba.com/stats/commonallplayers?IsOnlyCurrentSeason=1&LeagueID=00&Season=${CURRENT_SEASON}`,
-        nbaHeaders
+        { headers: nbaHeaders, timeout: 4500 }
       );
       const result = response.data?.resultSets?.[0];
       if (!Array.isArray(result?.headers) || !Array.isArray(result?.rowSet)) throw new Error("Invalid NBA roster response");
