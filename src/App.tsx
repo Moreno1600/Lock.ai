@@ -64,6 +64,21 @@ interface FavoriteProp {
 }
 
 
+// Resample observed game logs rather than inventing a parametric player projection.
+function simulateNbaProp(games: Game[], category: string, line: number, simulations = 10000) {
+  const samples = games.map(g => Number(g[category])).filter(n => Number.isFinite(n) && n >= 0);
+  if (samples.length < 3 || !Number.isFinite(line)) return null;
+  let over = 0, under = 0, push = 0, total = 0;
+  for (let i = 0; i < simulations; i++) {
+    const value = samples[Math.floor(Math.random() * samples.length)];
+    total += value;
+    if (value > line) over++;
+    else if (value < line) under++;
+    else push++;
+  }
+  return { over: over / simulations, under: under / simulations, push: push / simulations, mean: total / simulations, games: samples.length, simulations };
+}
+
 const defaultNbaCategories = ['PTS', 'REB', 'AST', 'PRA', 'RA', 'PR', 'PA', 'FAN', '3PM'];
 const defaultMlbCategories = ['PTS', 'TB', 'SO', 'OUTS', 'ER', 'H_R_RBI']; // Mixed simplified
 const defaultNflCategories = ['PASS_YDS', 'RUSH_YDS', 'REC_YDS', 'REC', 'PASS_TD', 'TD', 'CMP', 'PTS'];
@@ -302,6 +317,10 @@ export default function App() {
   useEffect(() => {
     axios.get('/api/season-status').then(res => setSeasonStatus(res.data)).catch(() => {});
   }, []);
+
+  const [propSimResult, setPropSimResult] = useState<ReturnType<typeof simulateNbaProp>>(null);
+
+  useEffect(() => { setPropSimResult(null); }, [selectedPlayer?.PERSON_ID, statCategory, targetLine, sport]);
 
   // Line Movement
   const [lineHistory, setLineHistory] = useState<any[]>([]);
@@ -1445,6 +1464,33 @@ export default function App() {
                       </div>
                     </div>
                     
+                    {sport === 'NBA' && (
+                      <div className="rounded-2xl border border-emerald-500/20 bg-zinc-900/70 p-4 space-y-3">
+                        <div className="flex items-center justify-between gap-3">
+                          <div className="flex items-center gap-2 text-xs font-bold text-zinc-100">
+                            <Calculator className="w-4 h-4 text-emerald-400" /> Player Prop Simulator
+                          </div>
+                          <button
+                            type="button"
+                            disabled={!isValidTarget || games.length < 3}
+                            onClick={() => setPropSimResult(simulateNbaProp(games, statCategory, Number(targetLine)))}
+                            className="rounded-lg bg-emerald-500 px-3 py-2 text-xs font-bold text-zinc-950 disabled:opacity-40"
+                          >Simulate 10,000</button>
+                        </div>
+                        {propSimResult ? (
+                          <div className="space-y-2">
+                            <div className="grid grid-cols-3 gap-2 text-center">
+                              <div><div className="text-[10px] text-zinc-500">OVER</div><div className="text-lg font-black text-emerald-400">{(propSimResult.over * 100).toFixed(1)}%</div></div>
+                              <div><div className="text-[10px] text-zinc-500">UNDER</div><div className="text-lg font-black text-sky-400">{(propSimResult.under * 100).toFixed(1)}%</div></div>
+                              <div><div className="text-[10px] text-zinc-500">AVG</div><div className="text-lg font-black text-zinc-100">{propSimResult.mean.toFixed(1)}</div></div>
+                            </div>
+                            {propSimResult.push > 0 && <p className="text-xs text-zinc-400">Push: {(propSimResult.push * 100).toFixed(1)}%</p>}
+                            <p className="text-[10px] text-zinc-500">Historical bootstrap of {propSimResult.games} recorded games. Does not adjust for opponent, injuries, minutes, or correlations; not a calibrated betting probability.</p>
+                          </div>
+                        ) : <p className="text-[10px] text-zinc-500">Enter a line and simulate from available game logs (minimum 3 games).</p>}
+                      </div>
+                    )}
+
                     {isValidTarget && (
                       <div className="space-y-4">
                         <div className="bg-zinc-950/80 rounded-2xl p-5 border border-zinc-800/80 flex items-center justify-between shadow-inner">
