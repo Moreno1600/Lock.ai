@@ -1091,6 +1091,47 @@ async function startServer() {
     }
   });
 
+  // Automatically generated NBA player-prop projections for today's scheduled teams.
+  app.get("/api/nba/auto-props", async (_req, res) => {
+    if (!getSeasonStatus().NBA.active) return res.json({ unavailable: true, reason: "NBA season inactive." });
+    try {
+      const sb = await axios.get("https://cdn.nba.com/static/json/liveData/scoreboard/todaysScoreboard_00.json", { timeout: 10000, headers: cdnHeaders });
+      const matchups = new Map<number, string>();
+      for (const g of sb.data?.scoreboard?.games || []) {
+        if (Number(g.gameStatus) === 3) continue;
+        matchups.set(Number(g.homeTeam.teamId), `vs ${g.awayTeam.teamTricode}`);
+        matchups.set(Number(g.awayTeam.teamId), `@ ${g.homeTeam.teamTricode}`);
+      }
+      if (!matchups.size) return res.json({ props: [], note: "No upcoming NBA games on today's scoreboard." });
+      await fetchPlayers();
+      await fetchSeasonAverages();
+      const props: any[] = [];
+      const normal = () => Math.sqrt(-2 * Math.log(Math.max(Number.EPSILON, Math.random()))) * Math.cos(2 * Math.PI * Math.random());
+      const eligible = playersCache.filter(p => matchups.has(Number(p.TEAM_ID)) && seasonAveragesCache[p.PERSON_ID])
+        .sort((a, b) => Number(seasonAveragesCache[b.PERSON_ID]?.ppg || 0) - Number(seasonAveragesCache[a.PERSON_ID]?.ppg || 0)).slice(0, 32);
+      for (const p of eligible) {
+        const av = seasonAveragesCache[p.PERSON_ID];
+        for (const [category, mean] of [["PTS", Number(av.ppg)], ["REB", Number(av.rpg)], ["AST", Number(av.apg)], ["PRA", Number(av.ppg) + Number(av.rpg) + Number(av.apg)]] as [string, number][]) {
+          if (!Number.isFinite(mean) || mean <= 0) continue;
+          const line = Math.max(0.5, Math.floor(mean) + 0.5);
+          const sd = Math.max(1.5, Math.sqrt(mean) * (category === "PTS" || category === "PRA" ? 2.0 : 1.5));
+          let over = 0, sum = 0;
+          const sims = 10000;
+          for (let i = 0; i < sims; i++) {
+            const value = Math.max(0, Math.round(mean + sd * normal()));
+            sum += value;
+            if (value > line) over++;
+          }
+          props.push({ playerId: p.PERSON_ID, playerName: p.DISPLAY_FIRST_LAST, team: p.TEAM_ABBREVIATION, matchup: matchups.get(Number(p.TEAM_ID)), category, line, overProb: Number((over / sims).toFixed(3)), underProb: Number((1 - over / sims).toFixed(3)), projected: Number((sum / sims).toFixed(1)), sims });
+        }
+      }
+      return res.json({ props, note: "Illustrative model based on available season averages and assumed variance. Lines are generated estimates, NOT sportsbook lines. Not calibrated for injuries, opponents, minutes or correlations." });
+    } catch (e: any) {
+      console.error("Auto NBA props failed:", e.message);
+      return res.status(503).json({ error: "Unable to load NBA player projections right now." });
+    }
+  });
+
   app.get("/api/parlay/generate", async (req, res) => {
     const sport = String(req.query.sport || "MLB").toUpperCase();
     const legCount = Math.min(6, Math.max(2, parseInt(String(req.query.legs), 10) || 3));
