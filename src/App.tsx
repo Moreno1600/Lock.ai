@@ -1836,6 +1836,7 @@ function SimulationView({ gameId, sport }: { gameId: string, sport: Sport }) {
   }
 
   const { home, away, totals, runLine, distribution, mostCommonScore, sims } = result;
+  const isNbaSim = sport === "NBA";
   const awayPct = Math.round(away.winProb * 100);
   const homePct = Math.round(home.winProb * 100);
 
@@ -1877,7 +1878,7 @@ function SimulationView({ gameId, sport }: { gameId: string, sport: Sport }) {
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
         {/* Run line */}
         <div className="bg-zinc-900/40 border border-zinc-800/60 rounded-3xl p-6 space-y-4">
-          <div className="micro-label">Run Line</div>
+          <div className="micro-label">{isNbaSim ? "Illustrative Spread" : "Run Line"}</div>
           <div className="space-y-3">
             <div className="flex items-center justify-between">
               <span className="text-xs font-bold text-zinc-300">{home.tricode} -1.5</span>
@@ -1897,7 +1898,7 @@ function SimulationView({ gameId, sport }: { gameId: string, sport: Sport }) {
 
         {/* Totals ladder */}
         <div className="bg-zinc-900/40 border border-zinc-800/60 rounded-3xl p-6 space-y-4">
-          <div className="micro-label">Total Runs — Over/Under</div>
+          <div className="micro-label">{isNbaSim ? "Total Points — Over/Under" : "Total Runs — Over/Under"}</div>
           <div className="space-y-2">
             {totals.map((t: any) => (
               <div key={t.line} className="flex items-center gap-3">
@@ -1915,7 +1916,7 @@ function SimulationView({ gameId, sport }: { gameId: string, sport: Sport }) {
 
       {/* Total runs distribution */}
       <div className="bg-zinc-900/40 border border-zinc-800/60 rounded-3xl p-6 space-y-4">
-        <div className="micro-label">Total Runs Distribution</div>
+        <div className="micro-label">{isNbaSim ? "Total Points Distribution" : "Total Runs Distribution"}</div>
         <div className="h-44">
           <ResponsiveContainer width="100%" height="100%">
             <AreaChart data={distribution}>
@@ -1931,14 +1932,14 @@ function SimulationView({ gameId, sport }: { gameId: string, sport: Sport }) {
               <Tooltip
                 contentStyle={{ background: '#09090b', border: '1px solid #27272a', borderRadius: '12px' }}
                 formatter={(value: any) => [`${value}% of sims`, 'Frequency']}
-                labelFormatter={(label: any) => `${label} total runs`}
+                labelFormatter={(label: any) => `${label} total ${isNbaSim ? "points" : "runs"}`}
               />
               <Area type="monotone" dataKey="pct" stroke="#10b981" strokeWidth={2} fill="url(#simGradient)" />
             </AreaChart>
           </ResponsiveContainer>
         </div>
         <p className="text-[10px] text-zinc-600 font-medium leading-relaxed">
-          Model: each team's expected runs blend season scoring vs. the opponent's run prevention (small home-field bump), sampled {sims.toLocaleString()} times.
+          {isNbaSim ? result.modelNote : `Model: each team\'s expected runs blend season scoring vs. the opponent\'s run prevention (small home-field bump), sampled ${sims.toLocaleString()} times.`}
         </p>
       </div>
     </div>
