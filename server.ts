@@ -1095,7 +1095,7 @@ async function startServer() {
   app.get("/api/soccer/fixtures", async (req, res) => {
     const league = String(req.query.league || "");
     const date = String(req.query.date || "");
-    if (!soccerLeagues.includes(league) || !/^\\d{8}$/.test(date)) {
+    if (!soccerLeagues.includes(league) || !/^\d{8}$/.test(date)) {
       return res.status(400).json({ error: "Invalid competition or date" });
     }
     try {
@@ -1122,7 +1122,7 @@ async function startServer() {
   app.get("/api/soccer/match/:eventId", async (req, res) => {
     const league = String(req.query.league || "");
     const eventId = String(req.params.eventId || "");
-    if (!soccerLeagues.includes(league) || !/^\\d+$/.test(eventId)) {
+    if (!soccerLeagues.includes(league) || !/^\d+$/.test(eventId)) {
       return res.status(400).json({ error: "Invalid match" });
     }
     const base = `https://site.api.espn.com/apis/site/v2/sports/soccer/${league}`;
