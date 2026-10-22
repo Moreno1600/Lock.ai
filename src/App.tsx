@@ -1947,7 +1947,7 @@ function TemporarySoccerView() {
       <div className="rounded-2xl border border-emerald-500/30 bg-zinc-950 p-4 space-y-4">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div><h4 className="font-black text-zinc-100">5,000-Match Simulation</h4>
-            <p className="text-xs text-zinc-500">Recent verified team results · simplified goals model</p></div>
+            <p className="text-xs text-zinc-500">Domestic league + cup + European results · simplified goals model</p></div>
           <button type="button" onClick={runSimulation} disabled={simLoading} className="rounded-xl bg-emerald-500 px-4 py-3 text-sm font-black text-black disabled:opacity-50">{simLoading ? 'Simulating...' : 'Run 5,000 Sims'}</button>
         </div>
         {simError && <p className="text-xs text-amber-400">{simError}</p>}
@@ -1968,6 +1968,17 @@ function TemporarySoccerView() {
           ].map(([label,value]) => <div key={String(label)} className="flex items-center justify-between rounded-xl bg-zinc-900 p-3 text-xs">
             <span className="text-zinc-300">{label}</span><span className="font-black text-emerald-400">{value}%</span>
           </div>)}</div>
+          {sim.teamContext && <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            {([['Home', sim.home, sim.teamContext.home], ['Away', sim.away, sim.teamContext.away]] as const).map(([side, team, context]) =>
+              <div key={side} className="rounded-xl border border-zinc-800 bg-zinc-900 p-3 space-y-2">
+                <p className="font-bold text-sm text-zinc-100">{team.name} · {side}</p>
+                <p className="text-xs text-zinc-400">Recent wins: {context.recentWins}/{side === 'Home' ? sim.samples.home : sim.samples.away}</p>
+                {context.standing ? <p className="text-xs text-zinc-300">{context.standing.league} · League rank: {context.standing.rank ?? 'N/A'} · W/D/L: {context.standing.wins ?? '—'}/{context.standing.draws ?? '—'}/{context.standing.losses ?? '—'} · Points: {context.standing.points ?? '—'}</p> : <p className="text-xs text-zinc-500">Domestic league standing unavailable</p>}
+                <p className="text-xs text-zinc-500">Sources: {(context.leagues || []).join(', ') || 'None verified'}</p>
+                <p className="text-xs font-bold text-amber-400">Reported injuries</p>
+                {context.injuries?.length ? context.injuries.map((inj: any, i: number) => <p key={i} className="text-xs text-zinc-300">{inj.name} · {typeof inj.status === 'string' ? inj.status : 'Status reported'}</p>) : <p className="text-xs text-zinc-500">No injury reports returned; not confirmation of full fitness</p>}
+              </div>)}
+          </div>}
           <p className="text-xs text-zinc-400">Expected goals: {sim.home.name} {sim.expectedGoals.home} · {sim.away.name} {sim.expectedGoals.away}</p>
           <p className="text-xs text-amber-400">{sim.limitations} These are model estimates, not betting guarantees or bookmaker probabilities.</p>
         </div>}
