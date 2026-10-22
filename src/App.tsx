@@ -1888,7 +1888,7 @@ function TemporarySoccerView() {
       }
       setSim(data);
     } catch (e: any) {
-      setSimError(e.response?.data?.error || e.message || 'Unable to run a verified simulation right now.');
+      setSimError((e.response?.data?.error || e.message || 'Unable to run a verified simulation right now.') + (e.response?.data?.samples ? ` (Verified matches found: home ${e.response.data.samples.home}, away ${e.response.data.samples.away}.)` : ''));
     } finally { setSimLoading(false); }
   };
   useEffect(() => { setSim(null); setSimError(''); }, [selected, competition, date]);
@@ -1947,12 +1947,12 @@ function TemporarySoccerView() {
       <div className="rounded-2xl border border-emerald-500/30 bg-zinc-950 p-4 space-y-4">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div><h4 className="font-black text-zinc-100">5,000-Match Simulation</h4>
-            <p className="text-xs text-zinc-500">Recent verified UEFA results · simplified goals model</p></div>
+            <p className="text-xs text-zinc-500">Recent verified team results · simplified goals model</p></div>
           <button type="button" onClick={runSimulation} disabled={simLoading} className="rounded-xl bg-emerald-500 px-4 py-3 text-sm font-black text-black disabled:opacity-50">{simLoading ? 'Simulating...' : 'Run 5,000 Sims'}</button>
         </div>
         {simError && <p className="text-xs text-amber-400">{simError}</p>}
         {sim && <div className="space-y-4">
-          <p className="text-xs text-zinc-400">Based on {sim.samples.home} recent {sim.home.name} matches and {sim.samples.away} recent {sim.away.name} matches in this competition.</p>
+          <p className="text-xs text-zinc-400">Based on {sim.samples.home} recent {sim.home.name} matches and {sim.samples.away} recent {sim.away.name} matches from available team history.</p>
           <div className="grid grid-cols-3 gap-2">{[
             [sim.home.name + ' win', sim.probabilities.homeWin],
             ['Draw', sim.probabilities.draw],
