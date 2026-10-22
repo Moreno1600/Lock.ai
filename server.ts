@@ -1181,9 +1181,15 @@ async function startServer() {
   const soccerName = (name: string) => name.toLowerCase().normalize("NFKD")
     .replace(/[\u0300-\u036f]/g, "").replace(/\b(fc|cf|sc|afc|fk|club|football|soccer)\b/g, "")
     .replace(/[^a-z0-9]/g, "");
-  const soccerTeams = async (league: string) => {
-    const data = await soccerFetch(`https://site.api.espn.com/apis/site/v2/sports/soccer/${league}/teams`, { limit: 200 });
-    return (data.sports?.[0]?.leagues?.[0]?.teams || []).map((entry: any) => entry.team || entry);
+  const soccerTeamIndex = new Map<string, Promise<any[]>>();
+  const soccerTeams = (league: string): Promise<any[]> => {
+    if (!soccerTeamIndex.has(league)) {
+      const pending = soccerFetch(`https://site.api.espn.com/apis/site/v2/sports/soccer/${league}/teams`, { limit: 200 })
+        .then(data => (data.sports?.[0]?.leagues?.[0]?.teams || []).map((entry: any) => entry.team || entry))
+        .catch(error => { soccerTeamIndex.delete(league); throw error; });
+      soccerTeamIndex.set(league, pending);
+    }
+    return soccerTeamIndex.get(league)!;
   };
   const soccerLeagueMemberships = async (team: any) => {
     const results = await Promise.allSettled(soccerDomesticLeagues.map(async league => {
