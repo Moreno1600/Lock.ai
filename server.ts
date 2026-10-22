@@ -1193,10 +1193,19 @@ async function startServer() {
       if (!Number.isFinite(fixtureDate.getTime())) return res.status(422).json({ error: "Match date unavailable" });
       const from = new Date(fixtureDate.getTime() - 105 * 86400000);
       const stamp = (d: Date) => d.toISOString().slice(0, 10).replace(/-/g, "");
-      const history = await soccerFetch(`${base}/scoreboard`, {
-        dates: `${stamp(from)}-${stamp(fixtureDate)}`, limit: 1000
-      });
-      const games = (history.events || []).filter((e: any) =>
+      // ESPN scoreboards can time out or reject large date ranges. Fetch
+      // bounded monthly slices in parallel instead of one massive request.
+      const windows: Array<{ start: Date; end: Date }> = [];
+      for (let cursor = from.getTime(); cursor < fixtureDate.getTime(); cursor += 21 * 86400000) {
+        windows.push({ start: new Date(cursor), end: new Date(Math.min(cursor + 21 * 86400000 - 1, fixtureDate.getTime())) });
+      }
+      const historyParts = await Promise.allSettled(windows.map(w =>
+        soccerFetch(`${base}/scoreboard`, { dates: `${stamp(w.start)}-${stamp(w.end)}`, limit: 300 })
+      ));
+      const historyEvents = [...new Map(historyParts.flatMap(part =>
+        part.status === "fulfilled" ? (part.value.events || []) : []
+      ).map((e: any) => [String(e.id), e])).values()];
+      const games = historyEvents.filter((e: any) =>
         String(e.id) !== eventId &&
         new Date(e.date).getTime() < fixtureDate.getTime() &&
         e.status?.type?.completed === true
