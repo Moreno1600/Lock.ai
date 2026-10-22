@@ -1879,9 +1879,16 @@ function TemporarySoccerView() {
     setSimLoading(true); setSim(null); setSimError('');
     try {
       const result = await axios.get('/api/soccer/simulate/' + encodeURIComponent(selected), { params: { league: competition } });
-      setSim(result.data);
+      const data = result.data;
+      const p = data?.probabilities;
+      if (!data?.home?.name || !data?.away?.name || !data?.samples ||
+          !data?.expectedGoals || !p ||
+          !['homeWin', 'draw', 'awayWin', 'over15', 'over25', 'over35', 'bttsYes'].every(k => Number.isFinite(p[k]))) {
+        throw new Error('Simulation returned incomplete data. Please retry later.');
+      }
+      setSim(data);
     } catch (e: any) {
-      setSimError(e.response?.data?.error || 'Unable to run a verified simulation right now.');
+      setSimError(e.response?.data?.error || e.message || 'Unable to run a verified simulation right now.');
     } finally { setSimLoading(false); }
   };
   useEffect(() => { setSim(null); setSimError(''); }, [selected, competition, date]);
