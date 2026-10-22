@@ -1191,37 +1191,52 @@ async function startServer() {
       const away = teams.find((t: any) => t.homeAway === "away");
       const fixtureDate = new Date(summary.header?.competitions?.[0]?.date || summary.header?.competitions?.[0]?.startDate || Date.now());
       if (!Number.isFinite(fixtureDate.getTime())) return res.status(422).json({ error: "Match date unavailable" });
-      const from = new Date(fixtureDate.getTime() - 105 * 86400000);
       const stamp = (d: Date) => d.toISOString().slice(0, 10).replace(/-/g, "");
-      // ESPN scoreboards can time out or reject large date ranges. Fetch
-      // bounded monthly slices in parallel instead of one massive request.
+      // Use actual team schedule endpoints first: they include previous rounds and
+      // season results more reliably than a league-wide scoreboard date range.
+      const seasonYears = [fixtureDate.getUTCFullYear(), fixtureDate.getUTCFullYear() - 1];
+      const fetchTeamEvents = async (team: any) => {
+        const urls = seasonYears.map(year =>
+          soccerFetch(`${base}/teams/${encodeURIComponent(team.id)}/schedule`, { season: year, limit: 300 })
+        );
+        const parts = await Promise.allSettled(urls);
+        return parts.flatMap(part => part.status === "fulfilled" ? (part.value.events || []) : []);
+      };
+      const [homeEvents, awayEvents] = await Promise.all([fetchTeamEvents(home), fetchTeamEvents(away)]);
+      // Supplement schedules with competition scoreboards; use a bounded time
+      // window and retain only completed matches before the selected kickoff.
+      const from = new Date(fixtureDate.getTime() - 365 * 86400000);
       const windows: Array<{ start: Date; end: Date }> = [];
-      for (let cursor = from.getTime(); cursor < fixtureDate.getTime(); cursor += 21 * 86400000) {
-        windows.push({ start: new Date(cursor), end: new Date(Math.min(cursor + 21 * 86400000 - 1, fixtureDate.getTime())) });
+      for (let cursor = from.getTime(); cursor < fixtureDate.getTime(); cursor += 28 * 86400000) {
+        windows.push({ start: new Date(cursor), end: new Date(Math.min(cursor + 28 * 86400000 - 1, fixtureDate.getTime())) });
       }
       const historyParts = await Promise.allSettled(windows.map(w =>
         soccerFetch(`${base}/scoreboard`, { dates: `${stamp(w.start)}-${stamp(w.end)}`, limit: 300 })
       ));
-      const historyEvents = [...new Map(historyParts.flatMap(part =>
+      const allEvents = [...homeEvents, ...awayEvents, ...historyParts.flatMap(part =>
         part.status === "fulfilled" ? (part.value.events || []) : []
-      ).map((e: any) => [String(e.id), e])).values()];
-      const games = historyEvents.filter((e: any) =>
+      )];
+      const games = [...new Map(allEvents.map((e: any) => [String(e.id), e])).values()].filter((e: any) =>
         String(e.id) !== eventId &&
+        Number.isFinite(new Date(e.date).getTime()) &&
         new Date(e.date).getTime() < fixtureDate.getTime() &&
-        e.status?.type?.completed === true
+        (e.status?.type?.completed === true || e.competitions?.[0]?.status?.type?.completed === true)
       );
       const form = (id: string) => games.flatMap((e: any) => {
         const sides = e.competitions?.[0]?.competitors || [];
         const ours = sides.find((c: any) => String(c.team?.id || c.id) === id);
         const theirs = sides.find((c: any) => String(c.team?.id || c.id) !== id);
-        const scored = Number(ours?.score), conceded = Number(theirs?.score);
-        return ours && theirs && ours.score !== null && ours.score !== undefined && theirs.score !== null && theirs.score !== undefined && Number.isFinite(scored) && Number.isFinite(conceded)
+        const scored = Number(ours?.score?.value ?? ours?.score);
+        const conceded = Number(theirs?.score?.value ?? theirs?.score);
+        return ours && theirs && ours.score != null && theirs.score != null &&
+          Number.isFinite(scored) && Number.isFinite(conceded)
           ? [{ scored, conceded, date: new Date(e.date).getTime() }] : [];
       }).sort((a: any, b: any) => b.date - a.date).slice(0, 10);
       const h = form(home.id), a = form(away.id);
       if (h.length < 3 || a.length < 3) return res.status(422).json({
-        error: "Not enough verified recent Europa/Conference League results to simulate this matchup.",
-        samples: { home: h.length, away: a.length }
+        error: "Could not retrieve at least three verified completed matches for both teams. ESPN may have incomplete competition history.",
+        samples: { home: h.length, away: a.length },
+        source: "ESPN team schedules and competition scoreboards"
       });
       const avg = (rows: any[], key: "scored" | "conceded") => rows.reduce((sum, row) => sum + row[key], 0) / rows.length;
       const clamp = (v: number) => Math.max(0.25, Math.min(3.5, v));
@@ -1248,12 +1263,12 @@ async function startServer() {
       }
       const pct = (count: number) => Math.round(count / n * 1000) / 10;
       return res.json({
-        model: "Independent Poisson goals, recent same-competition results", simulations: n,
+        model: "Independent Poisson goals, recent verified ESPN team results", simulations: n,
         home, away, samples: { home: h.length, away: a.length },
         expectedGoals: { home: +lambdaHome.toFixed(2), away: +lambdaAway.toFixed(2) },
         probabilities: { homeWin: pct(homeWins), draw: pct(draws), awayWin: pct(awayWins),
           over15: pct(over15), over25: pct(over25), over35: pct(over35), bttsYes: pct(btts) },
-        limitations: "Same-competition results only; simplified model. No lineup, injury, bookmaker odds, or player-specific adjustments."
+        limitations: "Uses available ESPN team results and competition scoreboards, which may omit domestic matches; simplified model. No lineup, injury, bookmaker odds, or player-specific adjustments."
       });
     } catch (error: any) {
       console.warn("UEFA simulation unavailable:", error.message);
