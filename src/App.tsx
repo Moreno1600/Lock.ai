@@ -651,12 +651,6 @@ export default function App() {
             label="Optimizer"
           />
           <SidebarIcon
-            icon={Activity}
-            active={activeTab === 'soccer'}
-            onClick={() => { setActiveTab('soccer'); setSelectedPlayer(null); }}
-            label="Soccer"
-          />
-          <SidebarIcon
             icon={Bookmark} 
             active={activeTab === 'favorites'} 
             onClick={() => setActiveTab('favorites')} 
@@ -689,10 +683,10 @@ export default function App() {
                 {/* League Toggle */}
                 <div className="flex items-center bg-zinc-900 border border-zinc-800 rounded-lg p-1 ml-0 md:ml-2">
                   <button
-                    onClick={() => setSport('NBA')}
+                    onClick={() => { setSport('NBA'); setActiveTab('home'); }}
                     className={cn(
                       "px-3 py-1.5 rounded text-[10px] font-black uppercase tracking-widest transition-all",
-                      sport === 'NBA' 
+                      sport === 'NBA' && activeTab !== 'soccer' 
                         ? "bg-zinc-800 text-emerald-400 shadow-sm" 
                         : "text-zinc-500 hover:text-zinc-300"
                     )}
@@ -700,10 +694,10 @@ export default function App() {
                     NBA
                   </button>
                   <button
-                    onClick={() => setSport('MLB')}
+                    onClick={() => { setSport('MLB'); setActiveTab('home'); }}
                     className={cn(
                       "px-3 py-1.5 rounded text-[10px] font-black uppercase tracking-widest transition-all",
-                      sport === 'MLB' 
+                      sport === 'MLB' && activeTab !== 'soccer' 
                         ? "bg-zinc-800 text-emerald-400 shadow-sm" 
                         : "text-zinc-500 hover:text-zinc-300"
                     )}
@@ -711,15 +705,27 @@ export default function App() {
                     MLB
                   </button>
                   <button
-                    onClick={() => setSport('NFL')}
+                    onClick={() => { setSport('NFL'); setActiveTab('home'); }}
                     className={cn(
                       "px-3 py-1.5 rounded text-[10px] font-black uppercase tracking-widest transition-all",
-                      sport === 'NFL' 
+                      sport === 'NFL' && activeTab !== 'soccer' 
                         ? "bg-zinc-800 text-emerald-400 shadow-sm" 
                         : "text-zinc-500 hover:text-zinc-300"
                     )}
                   >
                     NFL
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => { setActiveTab('soccer'); setSelectedPlayer(null); }}
+                    className={cn(
+                      "px-3 py-1.5 rounded text-[10px] font-black uppercase tracking-widest transition-all",
+                      activeTab === 'soccer'
+                        ? "bg-zinc-800 text-emerald-400 shadow-sm"
+                        : "text-zinc-500 hover:text-zinc-300"
+                    )}
+                  >
+                    Soccer
                   </button>
                 </div>
               </div>
