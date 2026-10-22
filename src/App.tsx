@@ -1871,6 +1871,21 @@ function TemporarySoccerView() {
   const [detailLoading, setDetailLoading] = useState(false);
   const [detailError, setDetailError] = useState('');
   const [filter, setFilter] = useState('');
+  const [sim, setSim] = useState<any>(null);
+  const [simLoading, setSimLoading] = useState(false);
+  const [simError, setSimError] = useState('');
+  const runSimulation = async () => {
+    if (!selected) return;
+    setSimLoading(true); setSim(null); setSimError('');
+    try {
+      const result = await axios.get('/api/soccer/simulate/' + encodeURIComponent(selected), { params: { league: competition } });
+      setSim(result.data);
+    } catch (e: any) {
+      setSimError(e.response?.data?.error || 'Unable to run a verified simulation right now.');
+    } finally { setSimLoading(false); }
+  };
+  useEffect(() => { setSim(null); setSimError(''); }, [selected, competition, date]);
+
   const detailsRef = useRef<HTMLElement | null>(null);
   useEffect(() => {
     if (selected) detailsRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
@@ -1922,6 +1937,34 @@ function TemporarySoccerView() {
         </button>)}</div>}
     {selected && <section ref={detailsRef} className="scroll-mt-24 rounded-3xl border border-emerald-500/50 bg-zinc-900/40 p-5 space-y-5">
       <div className="flex items-center justify-between gap-3"><h3 className="text-lg font-black">Match Players</h3><button onClick={() => setSelected(null)} aria-label="Close match details"><X className="w-5 h-5" /></button></div>
+      <div className="rounded-2xl border border-emerald-500/30 bg-zinc-950 p-4 space-y-4">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div><h4 className="font-black text-zinc-100">5,000-Match Simulation</h4>
+            <p className="text-xs text-zinc-500">Recent verified UEFA results · simplified goals model</p></div>
+          <button type="button" onClick={runSimulation} disabled={simLoading} className="rounded-xl bg-emerald-500 px-4 py-3 text-sm font-black text-black disabled:opacity-50">{simLoading ? 'Simulating...' : 'Run 5,000 Sims'}</button>
+        </div>
+        {simError && <p className="text-xs text-amber-400">{simError}</p>}
+        {sim && <div className="space-y-4">
+          <p className="text-xs text-zinc-400">Based on {sim.samples.home} recent {sim.home.name} matches and {sim.samples.away} recent {sim.away.name} matches in this competition.</p>
+          <div className="grid grid-cols-3 gap-2">{[
+            [sim.home.name + ' win', sim.probabilities.homeWin],
+            ['Draw', sim.probabilities.draw],
+            [sim.away.name + ' win', sim.probabilities.awayWin]
+          ].map(([label,value]) => <div key={String(label)} className="rounded-xl bg-zinc-900 p-3 text-center">
+            <div className="text-2xl font-black text-emerald-400">{value}%</div><div className="text-xs text-zinc-400 mt-1">{label}</div>
+          </div>)}</div>
+          <div className="grid grid-cols-2 gap-2">{[
+            ['Over 1.5 goals',sim.probabilities.over15],
+            ['Over 2.5 goals',sim.probabilities.over25],
+            ['Over 3.5 goals',sim.probabilities.over35],
+            ['Both teams score',sim.probabilities.bttsYes]
+          ].map(([label,value]) => <div key={String(label)} className="flex items-center justify-between rounded-xl bg-zinc-900 p-3 text-xs">
+            <span className="text-zinc-300">{label}</span><span className="font-black text-emerald-400">{value}%</span>
+          </div>)}</div>
+          <p className="text-xs text-zinc-400">Expected goals: {sim.home.name} {sim.expectedGoals.home} · {sim.away.name} {sim.expectedGoals.away}</p>
+          <p className="text-xs text-amber-400">{sim.limitations} These are model estimates, not betting guarantees or bookmaker probabilities.</p>
+        </div>}
+      </div>
       {detailLoading ? <p className="text-zinc-400 text-sm">Loading verified team squads...</p> : detailError ? <p className="text-red-400 text-sm">{detailError}</p> : details &&
         <><input aria-label="Filter players" value={filter} onChange={e => setFilter(e.target.value)} placeholder="Filter players in this match..." className="w-full rounded-xl border border-zinc-700 bg-zinc-950 px-4 py-3 text-sm" />
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">{details.teams.map(team => {
