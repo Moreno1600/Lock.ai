@@ -1232,6 +1232,20 @@ async function startServer() {
     } catch { return []; }
   };
 
+  const soccerKeyPlayers = async (league: string, id: string) => {
+    try {
+      const data = await soccerFetch(`https://site.api.espn.com/apis/site/v2/sports/soccer/${league}/teams/${id}/leaders`);
+      const groups = Array.isArray(data.leaders) ? data.leaders : [];
+      const players = groups.flatMap((group: any) => (group.leaders || []).map((entry: any) => ({
+        id: String(entry.athlete?.id || ""),
+        name: entry.athlete?.displayName || entry.athlete?.fullName || "",
+        metric: group.displayName || group.name || "Team leader",
+        value: entry.displayValue || (Number.isFinite(entry.value) ? String(entry.value) : null)
+      }))).filter((p: any) => p.id && p.name);
+      return [...new Map(players.map((p: any) => [p.id + ":" + p.metric, p])).values()].slice(0, 8);
+    } catch { return []; }
+  };
+
   // Temporary UEFA statistical simulator. Uses actual completed competition games.
   // A minimum sample is required; never substitute made-up team form.
   app.get("/api/soccer/simulate/:eventId", async (req, res) => {
@@ -1285,11 +1299,13 @@ async function startServer() {
       const cupCodes = ["eng.fa", "eng.league_cup", "esp.copa_del_rey", "ger.dfb_pokal", "ita.coppa_italia", "fra.coupe_de_france"];
       const domestic = (list: any[]) => list.find(l => !l.league.startsWith("uefa.") && !cupCodes.includes(l.league));
       const homeDomestic = domestic(homeLeagues), awayDomestic = domestic(awayLeagues);
-      const [homeStanding, awayStanding, homeInjuries, awayInjuries] = await Promise.all([
+      const [homeStanding, awayStanding, homeInjuries, awayInjuries, homeLeaders, awayLeaders] = await Promise.all([
         homeDomestic ? soccerStandings(homeDomestic.league, homeDomestic.id) : null,
         awayDomestic ? soccerStandings(awayDomestic.league, awayDomestic.id) : null,
         homeDomestic ? soccerInjuries(homeDomestic.league, homeDomestic.id) : soccerInjuries(league, home.id),
-        awayDomestic ? soccerInjuries(awayDomestic.league, awayDomestic.id) : soccerInjuries(league, away.id)
+        awayDomestic ? soccerInjuries(awayDomestic.league, awayDomestic.id) : soccerInjuries(league, away.id),
+        homeDomestic ? soccerKeyPlayers(homeDomestic.league, homeDomestic.id) : soccerKeyPlayers(league, home.id),
+        awayDomestic ? soccerKeyPlayers(awayDomestic.league, awayDomestic.id) : soccerKeyPlayers(league, away.id)
       ]);
       if (h.length < 3 || a.length < 3) return res.status(422).json({
         error: "Insufficient verified cross-competition results from ESPN. No simulation generated.",
@@ -1324,8 +1340,8 @@ async function startServer() {
         model: "Independent Poisson goals, recent cross-competition ESPN team results", simulations: n,
         home, away, samples: { home: h.length, away: a.length },
         teamContext: {
-          home: { standing: homeStanding, injuries: homeInjuries, leagues: homeLeagues.map(l => l.league), recentWins: h.filter(g => g.win).length },
-          away: { standing: awayStanding, injuries: awayInjuries, leagues: awayLeagues.map(l => l.league), recentWins: a.filter(g => g.win).length }
+          home: { standing: homeStanding, injuries: homeInjuries, keyPlayers: homeLeaders, leagues: homeLeagues.map(l => l.league), recentWins: h.filter(g => g.win).length },
+          away: { standing: awayStanding, injuries: awayInjuries, keyPlayers: awayLeaders, leagues: awayLeagues.map(l => l.league), recentWins: a.filter(g => g.win).length }
         },
         expectedGoals: { home: +lambdaHome.toFixed(2), away: +lambdaAway.toFixed(2) },
         probabilities: { homeWin: pct(homeWins), draw: pct(draws), awayWin: pct(awayWins),
