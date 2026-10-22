@@ -1871,6 +1871,10 @@ function TemporarySoccerView() {
   const [detailLoading, setDetailLoading] = useState(false);
   const [detailError, setDetailError] = useState('');
   const [filter, setFilter] = useState('');
+  const detailsRef = useRef<HTMLElement | null>(null);
+  useEffect(() => {
+    if (selected) detailsRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }, [selected]);
   useEffect(() => {
     let cancelled = false;
     setLoading(true); setError(''); setMatches([]); setSelected(null); setDetails(null);
@@ -1908,15 +1912,15 @@ function TemporarySoccerView() {
     {loading ? <p className="text-zinc-400">Loading fixtures...</p> : error ? <p className="text-red-400">{error}</p> :
       !matches.length ? <p className="text-zinc-400">No fixtures found for this date and competition.</p> :
       <div className="grid grid-cols-1 md:grid-cols-2 gap-3">{matches.map(m =>
-        <button key={m.id} onClick={() => setSelected(m.id)} className={cn('text-left rounded-2xl border p-5 space-y-3 transition-colors',selected === m.id ? 'border-emerald-500 bg-emerald-500/5' : 'border-zinc-800 bg-zinc-900/60 hover:border-zinc-600')}>
+        <button type="button" key={m.id} onClick={() => { setSelected(m.id); setDetails(null); }} className={cn('text-left rounded-2xl border p-5 space-y-3 transition-colors',selected === m.id ? 'border-emerald-500 bg-emerald-500/5' : 'border-zinc-800 bg-zinc-900/60 hover:border-zinc-600')}>
           <div className="text-xs text-emerald-400 font-bold">{m.status?.type?.description || 'Scheduled'} · {m.date ? new Date(m.date).toLocaleTimeString('en-US',{timeZone:'America/Chicago',hour:'numeric',minute:'2-digit'})+' CT' : ''}</div>
           <div className="flex items-center justify-between gap-3">{m.competitors.map(t => <div key={t.id} className="flex flex-1 min-w-0 flex-col items-center gap-2 text-center">
             {logo(t)}<span className="text-xs font-bold text-zinc-100">{t.name}</span>
             {t.score !== undefined && <span className="text-sm font-black text-emerald-400">{t.score}</span>}
           </div>)}</div>
-          <div className="text-xs text-zinc-500 text-center">View squads and lineup status <ChevronRight className="inline w-3 h-3" /></div>
+          <div className="flex items-center justify-center gap-2 rounded-lg bg-emerald-500/15 py-3 text-sm font-bold text-emerald-400">{selected === m.id ? "Viewing squads below" : "Tap to view squads & lineups"} <ChevronRight className="w-4 h-4" /></div>
         </button>)}</div>}
-    {selected && <section className="rounded-3xl border border-zinc-800 bg-zinc-900/40 p-5 space-y-5">
+    {selected && <section ref={detailsRef} className="scroll-mt-24 rounded-3xl border border-emerald-500/50 bg-zinc-900/40 p-5 space-y-5">
       <div className="flex items-center justify-between gap-3"><h3 className="text-lg font-black">Match Players</h3><button onClick={() => setSelected(null)} aria-label="Close match details"><X className="w-5 h-5" /></button></div>
       {detailLoading ? <p className="text-zinc-400 text-sm">Loading verified team squads...</p> : detailError ? <p className="text-red-400 text-sm">{detailError}</p> : details &&
         <><input aria-label="Filter players" value={filter} onChange={e => setFilter(e.target.value)} placeholder="Filter players in this match..." className="w-full rounded-xl border border-zinc-700 bg-zinc-950 px-4 py-3 text-sm" />
