@@ -1081,6 +1081,25 @@ async function startServer() {
     }
   });
 
+  // Temporary UEFA fixture feed. ESPN may omit lineups until close to kickoff.
+  app.get("/api/soccer/fixtures", async (req, res) => {
+    const league = String(req.query.league || "");
+    const date = String(req.query.date || "");
+    if (!["uefa.europa", "uefa.europa.conf"].includes(league) || !/^\\d{8}$/.test(date)) {
+      return res.status(400).json({ error: "Invalid competition or date" });
+    }
+    try {
+      const response = await axios.get(
+        `https://site.api.espn.com/apis/site/v2/sports/soccer/${league}/scoreboard`,
+        { params: { dates: date, limit: 100 }, timeout: 6000 }
+      );
+      return res.json({ events: response.data?.events || [], source: "ESPN scoreboard" });
+    } catch (error: any) {
+      console.warn("UEFA fixtures unavailable:", error.message);
+      return res.status(503).json({ error: "Soccer fixtures temporarily unavailable" });
+    }
+  });
+
   // Automatically generated NBA player-prop projections for today's scheduled teams.
   app.get("/api/nba/auto-props", async (_req, res) => {
     if (!getSeasonStatus().NBA.active) return res.json({ unavailable: true, reason: "NBA season inactive." });
