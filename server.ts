@@ -1206,7 +1206,7 @@ async function startServer() {
         const ours = sides.find((c: any) => String(c.team?.id || c.id) === id);
         const theirs = sides.find((c: any) => String(c.team?.id || c.id) !== id);
         const scored = Number(ours?.score), conceded = Number(theirs?.score);
-        return ours && theirs && Number.isFinite(scored) && Number.isFinite(conceded)
+        return ours && theirs && ours.score !== null && ours.score !== undefined && theirs.score !== null && theirs.score !== undefined && Number.isFinite(scored) && Number.isFinite(conceded)
           ? [{ scored, conceded, date: new Date(e.date).getTime() }] : [];
       }).sort((a: any, b: any) => b.date - a.date).slice(0, 10);
       const h = form(home.id), a = form(away.id);
