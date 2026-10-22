@@ -1168,6 +1168,70 @@ async function startServer() {
     }
   });
 
+  // Competition discovery: locate clubs by ESPN team ID OR normalized club name.
+  // UEFA and domestic competitions do not always share the same team ID.
+  const soccerDomesticLeagues = [
+    "eng.1", "eng.2", "esp.1", "esp.2", "ger.1", "ger.2", "ita.1", "ita.2",
+    "fra.1", "fra.2", "por.1", "ned.1", "bel.1", "sco.1", "tur.1", "gre.1",
+    "aut.1", "sui.1", "den.1", "nor.1", "swe.1", "pol.1", "cze.1",
+    "rou.1", "ukr.1", "cro.1", "ser.1", "eng.fa", "eng.league_cup",
+    "esp.copa_del_rey", "ger.dfb_pokal", "ita.coppa_italia",
+    "fra.coupe_de_france", "uefa.champions", "uefa.europa", "uefa.europa.conf"
+  ];
+  const soccerName = (name: string) => name.toLowerCase().normalize("NFKD")
+    .replace(/[\\u0300-\\u036f]/g, "").replace(/\\b(fc|cf|sc|afc|fk|club|football|soccer)\\b/g, "")
+    .replace(/[^a-z0-9]/g, "");
+  const soccerTeams = async (league: string) => {
+    const data = await soccerFetch(`https://site.api.espn.com/apis/site/v2/sports/soccer/${league}/teams`, { limit: 200 });
+    return (data.sports?.[0]?.leagues?.[0]?.teams || []).map((entry: any) => entry.team || entry);
+  };
+  const soccerLeagueMemberships = async (team: any) => {
+    const results = await Promise.allSettled(soccerDomesticLeagues.map(async league => {
+      const candidates = await soccerTeams(league);
+      const match = candidates.find((t: any) =>
+        soccerName(t.displayName || t.name || "") === soccerName(team.name) ||
+        (String(t.id) === team.id && soccerName(t.displayName || t.name || "") === soccerName(team.name))
+      );
+      return match ? { league, id: String(match.id), name: match.displayName || match.name } : null;
+    }));
+    return results.flatMap(result => result.status === "fulfilled" && result.value ? [result.value] : []);
+  };
+  const soccerStandings = async (league: string, id: string) => {
+    try {
+      const data = await soccerFetch(`https://site.api.espn.com/apis/v2/sports/soccer/${league}/standings`);
+      const entries: any[] = [];
+      const visit = (node: any) => {
+        if (!node || typeof node !== "object") return;
+        if (Array.isArray(node)) { node.forEach(visit); return; }
+        if (node.team && node.stats) entries.push(node);
+        if (node.children) visit(node.children);
+        if (node.standings?.entries) visit(node.standings.entries);
+        if (node.entries) visit(node.entries);
+      };
+      visit(data);
+      const entry = entries.find(e => String(e.team?.id) === id);
+      if (!entry) return null;
+      const stat = (names: string[]) => entry.stats.find((x: any) =>
+        names.includes(x.name) || names.includes(x.abbreviation));
+      return { league, rank: stat(["rank", "RANK"])?.value ?? null,
+        wins: stat(["wins", "W"])?.value ?? null,
+        draws: stat(["ties", "draws", "D"])?.value ?? null,
+        losses: stat(["losses", "L"])?.value ?? null,
+        points: stat(["points", "P"])?.value ?? null };
+    } catch { return null; }
+  };
+  const soccerInjuries = async (league: string, id: string) => {
+    try {
+      const data = await soccerFetch(`https://site.api.espn.com/apis/site/v2/sports/soccer/${league}/teams/${id}/injuries`);
+      const entries = Array.isArray(data.injuries) ? data.injuries : [];
+      return entries.flatMap((entry: any) => {
+        const name = entry.athlete?.displayName || entry.athlete?.fullName;
+        return name ? [{ name, status: entry.status || entry.type?.description || "Reported injury",
+          detail: entry.details?.detail || entry.details?.type || null }] : [];
+      }).slice(0, 12);
+    } catch { return []; }
+  };
+
   // Temporary UEFA statistical simulator. Uses actual completed competition games.
   // A minimum sample is required; never substitute made-up team form.
   app.get("/api/soccer/simulate/:eventId", async (req, res) => {
