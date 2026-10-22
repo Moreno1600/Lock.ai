@@ -1168,6 +1168,90 @@ async function startServer() {
     }
   });
 
+  // Temporary UEFA statistical simulator. Uses actual completed competition games.
+  // A minimum sample is required; never substitute made-up team form.
+  app.get("/api/soccer/simulate/:eventId", async (req, res) => {
+    const league = String(req.query.league || "");
+    const eventId = String(req.params.eventId || "");
+    if (!soccerLeagues.includes(league) || !/^\d+$/.test(eventId)) {
+      return res.status(400).json({ error: "Invalid competition or match" });
+    }
+    try {
+      const base = `https://site.api.espn.com/apis/site/v2/sports/soccer/${league}`;
+      const summary = await soccerFetch(`${base}/summary`, { event: eventId });
+      const fixture = summary.header?.competitions?.[0];
+      const teams = (fixture?.competitors || []).map((c: any) => ({
+        id: String(c.team?.id || c.id), name: c.team?.displayName || c.team?.name || "Unknown",
+        homeAway: c.homeAway
+      }));
+      if (teams.length !== 2 || !teams.some((t: any) => t.homeAway === "home")) {
+        return res.status(422).json({ error: "Match teams or home advantage not verified" });
+      }
+      const home = teams.find((t: any) => t.homeAway === "home");
+      const away = teams.find((t: any) => t.homeAway === "away");
+      const fixtureDate = new Date(summary.header?.competitions?.[0]?.date || summary.header?.competitions?.[0]?.startDate || Date.now());
+      if (!Number.isFinite(fixtureDate.getTime())) return res.status(422).json({ error: "Match date unavailable" });
+      const from = new Date(fixtureDate.getTime() - 105 * 86400000);
+      const stamp = (d: Date) => d.toISOString().slice(0, 10).replace(/-/g, "");
+      const history = await soccerFetch(`${base}/scoreboard`, {
+        dates: `${stamp(from)}-${stamp(fixtureDate)}`, limit: 1000
+      });
+      const games = (history.events || []).filter((e: any) =>
+        String(e.id) !== eventId &&
+        new Date(e.date).getTime() < fixtureDate.getTime() &&
+        e.status?.type?.completed === true
+      );
+      const form = (id: string) => games.flatMap((e: any) => {
+        const sides = e.competitions?.[0]?.competitors || [];
+        const ours = sides.find((c: any) => String(c.team?.id || c.id) === id);
+        const theirs = sides.find((c: any) => String(c.team?.id || c.id) !== id);
+        const scored = Number(ours?.score), conceded = Number(theirs?.score);
+        return ours && theirs && Number.isFinite(scored) && Number.isFinite(conceded)
+          ? [{ scored, conceded, date: new Date(e.date).getTime() }] : [];
+      }).sort((a: any, b: any) => b.date - a.date).slice(0, 10);
+      const h = form(home.id), a = form(away.id);
+      if (h.length < 3 || a.length < 3) return res.status(422).json({
+        error: "Not enough verified recent Europa/Conference League results to simulate this matchup.",
+        samples: { home: h.length, away: a.length }
+      });
+      const avg = (rows: any[], key: "scored" | "conceded") => rows.reduce((sum, row) => sum + row[key], 0) / rows.length;
+      const clamp = (v: number) => Math.max(0.25, Math.min(3.5, v));
+      // Simplified independent-Poisson model; NOT possession-level or player-prop simulation.
+      const lambdaHome = clamp((avg(h, "scored") + avg(a, "conceded")) / 2 * 1.08);
+      const lambdaAway = clamp((avg(a, "scored") + avg(h, "conceded")) / 2 * 0.92);
+      // Deterministic seeded PRNG makes refreshes reproducible for the same inputs.
+      let seed = [...(`${eventId}:${lambdaHome.toFixed(3)}:${lambdaAway.toFixed(3)}`)].reduce((n, ch) => ((n * 31 + ch.charCodeAt(0)) >>> 0), 2166136261);
+      const random = () => { seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0; return (seed + 0.5) / 4294967296; };
+      const poisson = (lambda: number) => {
+        const threshold = Math.exp(-lambda); let product = 1, count = 0;
+        do { count++; product *= random(); } while (product > threshold);
+        return count - 1;
+      };
+      const n = 5000;
+      let homeWins = 0, draws = 0, awayWins = 0, over15 = 0, over25 = 0, over35 = 0, btts = 0;
+      for (let i = 0; i < n; i++) {
+        const hg = poisson(lambdaHome), ag = poisson(lambdaAway);
+        if (hg > ag) homeWins++; else if (hg < ag) awayWins++; else draws++;
+        if (hg + ag > 1) over15++;
+        if (hg + ag > 2) over25++;
+        if (hg + ag > 3) over35++;
+        if (hg > 0 && ag > 0) btts++;
+      }
+      const pct = (count: number) => Math.round(count / n * 1000) / 10;
+      return res.json({
+        model: "Independent Poisson goals, recent same-competition results", simulations: n,
+        home, away, samples: { home: h.length, away: a.length },
+        expectedGoals: { home: +lambdaHome.toFixed(2), away: +lambdaAway.toFixed(2) },
+        probabilities: { homeWin: pct(homeWins), draw: pct(draws), awayWin: pct(awayWins),
+          over15: pct(over15), over25: pct(over25), over35: pct(over35), bttsYes: pct(btts) },
+        limitations: "Same-competition results only; simplified model. No lineup, injury, bookmaker odds, or player-specific adjustments."
+      });
+    } catch (error: any) {
+      console.warn("UEFA simulation unavailable:", error.message);
+      return res.status(503).json({ error: "Verified match history unavailable for simulation" });
+    }
+  });
+
   // Automatically generated NBA player-prop projections for today's scheduled teams.
   app.get("/api/nba/auto-props", async (_req, res) => {
     if (!getSeasonStatus().NBA.active) return res.json({ unavailable: true, reason: "NBA season inactive." });
