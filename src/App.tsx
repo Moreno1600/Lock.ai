@@ -654,7 +654,7 @@ export default function App() {
             icon={Activity}
             active={activeTab === 'soccer'}
             onClick={() => { setActiveTab('soccer'); setSelectedPlayer(null); }}
-            label="Europa"
+            label="Soccer"
           />
           <SidebarIcon
             icon={Bookmark} 
@@ -1861,7 +1861,7 @@ function TemporarySoccerView() {
   type Fixture = { id: string; name: string; date: string; status?: { type?: { description?: string } }; competitors: Club[] };
   type PlayerInfo = { id: string; name: string; position?: string; jersey?: string | null; headshot?: string | null; starter?: boolean };
   type ClubDetails = Club & { players: PlayerInfo[]; rosterAvailable: boolean; lineup: PlayerInfo[]; lineupConfirmed: boolean };
-  const [competition, setCompetition] = useState<'uefa.europa' | 'uefa.europa.conf'>('uefa.europa');
+  const [competition, setCompetition] = useState<'uefa.europa' | 'uefa.europa.conf' | 'uefa.champions' | 'eng.1' | 'esp.1'>('uefa.europa');
   const [matches, setMatches] = useState<Fixture[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -1920,16 +1920,23 @@ function TemporarySoccerView() {
     ? <img src={club.logo} alt={club.name + ' crest'} loading="lazy" className={size + ' object-contain'} onError={e => { e.currentTarget.style.display = 'none'; }} />
     : <div aria-label={club.name + ' crest unavailable'} className={size + ' flex items-center justify-center rounded-xl bg-zinc-800 text-xs text-zinc-400'}>FC</div>;
   return <div className="space-y-6">
-    <div className="flex flex-wrap items-start justify-between gap-4">
-      <div><h2 className="text-2xl md:text-3xl font-black text-zinc-100">Europa & Conference League</h2>
-        <p className="text-xs text-zinc-400 mt-2">Temporary match center · Club crests, current squad lists, and match lineups when available.</p></div>
-      <span className="rounded-full bg-amber-500/10 px-3 py-1 text-xs font-bold text-amber-400">Temporary</span>
-    </div>
-    <div className="flex flex-wrap gap-2">
-      <button className={cn('rounded-xl px-4 py-2 text-xs font-bold', competition === 'uefa.europa' ? 'bg-emerald-500 text-black' : 'bg-zinc-800')} onClick={() => setCompetition('uefa.europa')}>Europa League</button>
-      <button className={cn('rounded-xl px-4 py-2 text-xs font-bold', competition === 'uefa.europa.conf' ? 'bg-emerald-500 text-black' : 'bg-zinc-800')} onClick={() => setCompetition('uefa.europa.conf')}>Conference League</button>
+    <div className="flex flex-col sm:flex-row sm:items-center gap-3">
+      <div className="flex flex-1 gap-2 overflow-x-auto pb-2 sm:pb-0" role="tablist" aria-label="Soccer competitions">
+        {([
+          ['uefa.europa', 'Europa League'],
+          ['uefa.europa.conf', 'Conference League'],
+          ['uefa.champions', 'Champions League'],
+          ['eng.1', 'Premier League'],
+          ['esp.1', 'La Liga']
+        ] as const).map(([id, name]) =>
+          <button key={id} type="button" role="tab" aria-selected={competition === id}
+            onClick={() => setCompetition(id)}
+            className={cn('shrink-0 whitespace-nowrap rounded-xl px-4 py-3 text-xs font-bold transition-colors', competition === id ? 'bg-emerald-500 text-black' : 'bg-zinc-800 text-zinc-300 hover:bg-zinc-700')}>{name}</button>
+        )}
+      </div>
       <input aria-label="Match date" type="date" value={date.slice(0,4)+'-'+date.slice(4,6)+'-'+date.slice(6,8)}
-        onChange={e => setDate(e.target.value.replace(/-/g,''))} className="rounded-xl bg-zinc-800 px-3 py-2 text-xs text-white" />
+        onChange={e => setDate(e.target.value.replace(/-/g,''))}
+        className="shrink-0 rounded-xl bg-zinc-800 px-3 py-3 text-xs text-white" />
     </div>
     {loading ? <p className="text-zinc-400">Loading fixtures...</p> : error ? <p className="text-red-400">{error}</p> :
       !matches.length ? <p className="text-zinc-400">No fixtures found for this date and competition.</p> :
