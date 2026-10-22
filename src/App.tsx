@@ -1857,40 +1857,85 @@ export default function App() {
 }
 
 function TemporarySoccerView() {
+  type Club = { id: string; name: string; logo: string | null; homeAway?: string; score?: string };
+  type Fixture = { id: string; name: string; date: string; status?: { type?: { description?: string } }; competitors: Club[] };
+  type PlayerInfo = { id: string; name: string; position?: string; jersey?: string | null; headshot?: string | null; starter?: boolean };
+  type ClubDetails = Club & { players: PlayerInfo[]; rosterAvailable: boolean; lineup: PlayerInfo[]; lineupConfirmed: boolean };
   const [competition, setCompetition] = useState<'uefa.europa' | 'uefa.europa.conf'>('uefa.europa');
-  const [matches, setMatches] = useState<any[]>([]);
+  const [matches, setMatches] = useState<Fixture[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [date, setDate] = useState('20261022');
+  const [selected, setSelected] = useState<string | null>(null);
+  const [details, setDetails] = useState<{ teams: ClubDetails[] } | null>(null);
+  const [detailLoading, setDetailLoading] = useState(false);
+  const [detailError, setDetailError] = useState('');
+  const [filter, setFilter] = useState('');
   useEffect(() => {
     let cancelled = false;
-    setLoading(true); setError(''); setMatches([]);
+    setLoading(true); setError(''); setMatches([]); setSelected(null); setDetails(null);
     axios.get('/api/soccer/fixtures', { params: { league: competition, date } })
-      .then(r => { if (!cancelled) setMatches(r.data.events || []); })
-      .catch(() => { if (!cancelled) setError('Fixtures unavailable right now.'); })
+      .then(r => { if (!cancelled) setMatches(Array.isArray(r.data.events) ? r.data.events : []); })
+      .catch((e) => { if (!cancelled) setError(e.response?.data?.error || 'Fixtures unavailable right now.'); })
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
   }, [competition, date]);
-  return <div className="space-y-5">
-    <div><h2 className="text-2xl md:text-3xl font-black text-zinc-100">Europa & Conference League</h2>
-      <p className="text-xs text-zinc-400 mt-2">Temporary match center · Live fixtures and team lineups when published. Not betting predictions.</p></div>
+  useEffect(() => {
+    if (!selected) return;
+    let cancelled = false;
+    setDetails(null); setDetailError(''); setDetailLoading(true); setFilter('');
+    axios.get('/api/soccer/match/' + encodeURIComponent(selected), { params: { league: competition } })
+      .then(r => { if (!cancelled) setDetails(r.data); })
+      .catch(e => { if (!cancelled) setDetailError(e.response?.data?.error || 'Team rosters unavailable.'); })
+      .finally(() => { if (!cancelled) setDetailLoading(false); });
+    return () => { cancelled = true; };
+  }, [selected, competition]);
+  const logo = (club: Club, size = 'h-12 w-12') => club.logo
+    ? <img src={club.logo} alt={club.name + ' crest'} loading="lazy" className={size + ' object-contain'} onError={e => { e.currentTarget.style.display = 'none'; }} />
+    : <div aria-label={club.name + ' crest unavailable'} className={size + ' flex items-center justify-center rounded-xl bg-zinc-800 text-xs text-zinc-400'}>FC</div>;
+  return <div className="space-y-6">
+    <div className="flex flex-wrap items-start justify-between gap-4">
+      <div><h2 className="text-2xl md:text-3xl font-black text-zinc-100">Europa & Conference League</h2>
+        <p className="text-xs text-zinc-400 mt-2">Temporary match center · Club crests, current squad lists, and match lineups when available.</p></div>
+      <span className="rounded-full bg-amber-500/10 px-3 py-1 text-xs font-bold text-amber-400">Temporary</span>
+    </div>
     <div className="flex flex-wrap gap-2">
-      <button className={cn('rounded-xl px-4 py-2 text-xs font-bold',competition === 'uefa.europa' ? 'bg-emerald-500 text-black' : 'bg-zinc-800')} onClick={() => setCompetition('uefa.europa')}>Europa League</button>
-      <button className={cn('rounded-xl px-4 py-2 text-xs font-bold',competition === 'uefa.europa.conf' ? 'bg-emerald-500 text-black' : 'bg-zinc-800')} onClick={() => setCompetition('uefa.europa.conf')}>Conference League</button>
+      <button className={cn('rounded-xl px-4 py-2 text-xs font-bold', competition === 'uefa.europa' ? 'bg-emerald-500 text-black' : 'bg-zinc-800')} onClick={() => setCompetition('uefa.europa')}>Europa League</button>
+      <button className={cn('rounded-xl px-4 py-2 text-xs font-bold', competition === 'uefa.europa.conf' ? 'bg-emerald-500 text-black' : 'bg-zinc-800')} onClick={() => setCompetition('uefa.europa.conf')}>Conference League</button>
       <input aria-label="Match date" type="date" value={date.slice(0,4)+'-'+date.slice(4,6)+'-'+date.slice(6,8)}
         onChange={e => setDate(e.target.value.replace(/-/g,''))} className="rounded-xl bg-zinc-800 px-3 py-2 text-xs text-white" />
     </div>
     {loading ? <p className="text-zinc-400">Loading fixtures...</p> : error ? <p className="text-red-400">{error}</p> :
       !matches.length ? <p className="text-zinc-400">No fixtures found for this date and competition.</p> :
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">{matches.map((m:any) => <div key={m.id} className="rounded-2xl border border-zinc-800 bg-zinc-900/60 p-5 space-y-3">
-        <div className="text-xs text-emerald-400 font-bold">{m.status?.type?.description || 'Scheduled'} · {m.date ? new Date(m.date).toLocaleTimeString('en-US',{timeZone:'America/Chicago',hour:'numeric',minute:'2-digit'})+' CT' : ''}</div>
-        <div className="font-black text-lg text-zinc-100">{m.competitions?.[0]?.competitors?.map((t:any)=>t.team?.displayName).join(' vs ') || m.name}</div>
-        <div className="text-xs text-zinc-400">Lineups and player availability are shown only when the provider publishes them.</div>
-        {(m.competitions?.[0]?.competitors || []).map((t:any) => <div key={t.id} className="text-xs text-zinc-300">
-          <span className="font-bold">{t.team?.displayName}:</span> {t.lineup?.length ? t.lineup.map((p:any)=>p.athlete?.displayName).filter(Boolean).join(', ') : 'Lineup not published'}
-        </div>)}
-      </div>)}</div>}
-    <p className="text-xs text-amber-400">Check official lineups and current sportsbook markets before placing bets. This page does not invent player props or odds.</p>
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">{matches.map(m =>
+        <button key={m.id} onClick={() => setSelected(m.id)} className={cn('text-left rounded-2xl border p-5 space-y-3 transition-colors',selected === m.id ? 'border-emerald-500 bg-emerald-500/5' : 'border-zinc-800 bg-zinc-900/60 hover:border-zinc-600')}>
+          <div className="text-xs text-emerald-400 font-bold">{m.status?.type?.description || 'Scheduled'} · {m.date ? new Date(m.date).toLocaleTimeString('en-US',{timeZone:'America/Chicago',hour:'numeric',minute:'2-digit'})+' CT' : ''}</div>
+          <div className="flex items-center justify-between gap-3">{m.competitors.map(t => <div key={t.id} className="flex flex-1 min-w-0 flex-col items-center gap-2 text-center">
+            {logo(t)}<span className="text-xs font-bold text-zinc-100">{t.name}</span>
+            {t.score !== undefined && <span className="text-sm font-black text-emerald-400">{t.score}</span>}
+          </div>)}</div>
+          <div className="text-xs text-zinc-500 text-center">View squads and lineup status <ChevronRight className="inline w-3 h-3" /></div>
+        </button>)}</div>}
+    {selected && <section className="rounded-3xl border border-zinc-800 bg-zinc-900/40 p-5 space-y-5">
+      <div className="flex items-center justify-between gap-3"><h3 className="text-lg font-black">Match Players</h3><button onClick={() => setSelected(null)} aria-label="Close match details"><X className="w-5 h-5" /></button></div>
+      {detailLoading ? <p className="text-zinc-400 text-sm">Loading verified team squads...</p> : detailError ? <p className="text-red-400 text-sm">{detailError}</p> : details &&
+        <><input aria-label="Filter players" value={filter} onChange={e => setFilter(e.target.value)} placeholder="Filter players in this match..." className="w-full rounded-xl border border-zinc-700 bg-zinc-950 px-4 py-3 text-sm" />
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">{details.teams.map(team => {
+          const shown = team.players.filter(p => p.name.toLowerCase().includes(filter.toLowerCase()));
+          return <div key={team.id} className="rounded-2xl border border-zinc-800 bg-zinc-950/50 p-4 space-y-3">
+            <div className="flex items-center gap-3">{logo(team,'h-10 w-10')}<div><h4 className="font-black text-zinc-100">{team.name}</h4><p className="text-xs text-zinc-500">{team.rosterAvailable ? team.players.length + ' listed squad players' : 'Squad feed unavailable'}</p></div></div>
+            <div className="text-xs font-bold text-emerald-400">{team.lineupConfirmed ? 'Match participation data available' : 'Starting XI not yet verified'}</div>
+            {team.lineupConfirmed && <div className="rounded-xl bg-zinc-900 p-3 space-y-2">
+              <p className="text-xs font-black text-zinc-300">Published match players</p>
+              {team.lineup.filter(p=>p.name.toLowerCase().includes(filter.toLowerCase())).map(p => <p key={p.id} className="text-xs text-zinc-300">{p.starter ? '★ ' : ''}{p.name}{p.starter ? ' · Starter' : ''}</p>)}
+            </div>}
+            {team.rosterAvailable ? <div className="max-h-72 overflow-y-auto space-y-1">{shown.map(p => <div key={p.id} className="flex items-center justify-between gap-2 border-b border-zinc-800/60 py-2 text-xs">
+              <span className="text-zinc-200">{p.name}</span><span className="text-zinc-500">{p.position || 'Player'}{p.jersey ? ' · #'+p.jersey : ''}</span>
+            </div>)}{!shown.length && <p className="text-zinc-500 text-xs">No matching players</p>}</div> : <p className="text-xs text-amber-400">Cannot verify the squad for this club right now.</p>}
+          </div>;
+        })}</div></>}
+    </section>}
+    <p className="text-xs text-amber-400">A squad listing does not confirm a player is active, fit, or starting today. Only published match lineups can verify participation. No invented sportsbook odds or player props.</p>
   </div>;
 }
 
