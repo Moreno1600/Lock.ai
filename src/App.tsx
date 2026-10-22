@@ -309,7 +309,7 @@ export default function App() {
   useEffect(() => {
     localStorage.setItem('lockai-favorites', JSON.stringify(favorites));
   }, [favorites]);
-  const [activeTab, setActiveTab] = useState<'home' | 'favorites' | 'optimizer' | 'import' | 'tos'>('home');
+  const [activeTab, setActiveTab] = useState<'home' | 'favorites' | 'optimizer' | 'soccer' | 'import' | 'tos'>('home');
 
   // Season availability — off-season sports show an unavailable notice instead of fake data
   const [seasonStatus, setSeasonStatus] = useState<Record<string, { active: boolean; resumes: string }> | null>(null);
@@ -651,6 +651,12 @@ export default function App() {
             label="Optimizer"
           />
           <SidebarIcon
+            icon={Activity}
+            active={activeTab === 'soccer'}
+            onClick={() => { setActiveTab('soccer'); setSelectedPlayer(null); }}
+            label="Europa"
+          />
+          <SidebarIcon
             icon={Bookmark} 
             active={activeTab === 'favorites'} 
             onClick={() => setActiveTab('favorites')} 
@@ -859,7 +865,9 @@ export default function App() {
               </>
             )}
 
-            {activeTab === 'favorites' ? (
+            {activeTab === 'soccer' ? (
+              <TemporarySoccerView />
+            ) : activeTab === 'favorites' ? (
               <FavoritesView favorites={favorites} setFavorites={setFavorites} sport={sport} />
             ) : activeTab === 'optimizer' ? (
               <OptimizerView favorites={favorites} setFavorites={setFavorites} setActiveTab={setActiveTab} sport={sport} seasonStatus={seasonStatus} />
@@ -1846,6 +1854,44 @@ export default function App() {
     </div>
   </div>
 );
+}
+
+function TemporarySoccerView() {
+  const [competition, setCompetition] = useState<'uefa.europa' | 'uefa.europa.conf'>('uefa.europa');
+  const [matches, setMatches] = useState<any[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+  const [date, setDate] = useState('20261022');
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true); setError(''); setMatches([]);
+    axios.get('/api/soccer/fixtures', { params: { league: competition, date } })
+      .then(r => { if (!cancelled) setMatches(r.data.events || []); })
+      .catch(() => { if (!cancelled) setError('Fixtures unavailable right now.'); })
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
+  }, [competition, date]);
+  return <div className="space-y-5">
+    <div><h2 className="text-2xl md:text-3xl font-black text-zinc-100">Europa & Conference League</h2>
+      <p className="text-xs text-zinc-400 mt-2">Temporary match center · Live fixtures and team lineups when published. Not betting predictions.</p></div>
+    <div className="flex flex-wrap gap-2">
+      <button className={cn('rounded-xl px-4 py-2 text-xs font-bold',competition === 'uefa.europa' ? 'bg-emerald-500 text-black' : 'bg-zinc-800')} onClick={() => setCompetition('uefa.europa')}>Europa League</button>
+      <button className={cn('rounded-xl px-4 py-2 text-xs font-bold',competition === 'uefa.europa.conf' ? 'bg-emerald-500 text-black' : 'bg-zinc-800')} onClick={() => setCompetition('uefa.europa.conf')}>Conference League</button>
+      <input aria-label="Match date" type="date" value={date.slice(0,4)+'-'+date.slice(4,6)+'-'+date.slice(6,8)}
+        onChange={e => setDate(e.target.value.replace(/-/g,''))} className="rounded-xl bg-zinc-800 px-3 py-2 text-xs text-white" />
+    </div>
+    {loading ? <p className="text-zinc-400">Loading fixtures...</p> : error ? <p className="text-red-400">{error}</p> :
+      !matches.length ? <p className="text-zinc-400">No fixtures found for this date and competition.</p> :
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">{matches.map((m:any) => <div key={m.id} className="rounded-2xl border border-zinc-800 bg-zinc-900/60 p-5 space-y-3">
+        <div className="text-xs text-emerald-400 font-bold">{m.status?.type?.description || 'Scheduled'} · {m.date ? new Date(m.date).toLocaleTimeString('en-US',{timeZone:'America/Chicago',hour:'numeric',minute:'2-digit'})+' CT' : ''}</div>
+        <div className="font-black text-lg text-zinc-100">{m.competitions?.[0]?.competitors?.map((t:any)=>t.team?.displayName).join(' vs ') || m.name}</div>
+        <div className="text-xs text-zinc-400">Lineups and player availability are shown only when the provider publishes them.</div>
+        {(m.competitions?.[0]?.competitors || []).map((t:any) => <div key={t.id} className="text-xs text-zinc-300">
+          <span className="font-bold">{t.team?.displayName}:</span> {t.lineup?.length ? t.lineup.map((p:any)=>p.athlete?.displayName).filter(Boolean).join(', ') : 'Lineup not published'}
+        </div>)}
+      </div>)}</div>}
+    <p className="text-xs text-amber-400">Check official lineups and current sportsbook markets before placing bets. This page does not invent player props or odds.</p>
+  </div>;
 }
 
 function AutoNbaPropsView() {
