@@ -1081,22 +1081,90 @@ async function startServer() {
     }
   });
 
-  // Temporary UEFA fixture feed. ESPN may omit lineups until close to kickoff.
+  // Temporary UEFA match center: verified team IDs, logos, rosters and event lineups.
+  const soccerLeagues = ["uefa.europa", "uefa.europa.conf"];
+  const soccerCache = new Map<string, { until: number; data: any }>();
+  const soccerFetch = async (url: string, params?: Record<string, any>) => {
+    const key = url + JSON.stringify(params || {});
+    const cached = soccerCache.get(key);
+    if (cached && cached.until > Date.now()) return cached.data;
+    const response = await axios.get(url, { params, timeout: 5500 });
+    soccerCache.set(key, { until: Date.now() + 5 * 60 * 1000, data: response.data });
+    return response.data;
+  };
   app.get("/api/soccer/fixtures", async (req, res) => {
     const league = String(req.query.league || "");
     const date = String(req.query.date || "");
-    if (!["uefa.europa", "uefa.europa.conf"].includes(league) || !/^\\d{8}$/.test(date)) {
+    if (!soccerLeagues.includes(league) || !/^\\d{8}$/.test(date)) {
       return res.status(400).json({ error: "Invalid competition or date" });
     }
     try {
-      const response = await axios.get(
+      const data = await soccerFetch(
         `https://site.api.espn.com/apis/site/v2/sports/soccer/${league}/scoreboard`,
-        { params: { dates: date, limit: 100 }, timeout: 6000 }
+        { dates: date, limit: 100 }
       );
-      return res.json({ events: response.data?.events || [], source: "ESPN scoreboard" });
+      const events = (data.events || []).map((event: any) => ({
+        id: String(event.id), name: event.name, date: event.date, status: event.status,
+        competitors: (event.competitions?.[0]?.competitors || []).map((entry: any) => ({
+          id: String(entry.team?.id || entry.id),
+          name: entry.team?.displayName || entry.team?.name || "Unknown club",
+          homeAway: entry.homeAway, score: entry.score,
+          logo: entry.team?.logo || entry.team?.logos?.[0]?.href || null
+        }))
+      }));
+      return res.json({ events, source: "ESPN", fetchedAt: new Date().toISOString() });
     } catch (error: any) {
       console.warn("UEFA fixtures unavailable:", error.message);
       return res.status(503).json({ error: "Soccer fixtures temporarily unavailable" });
+    }
+  });
+
+  app.get("/api/soccer/match/:eventId", async (req, res) => {
+    const league = String(req.query.league || "");
+    const eventId = String(req.params.eventId || "");
+    if (!soccerLeagues.includes(league) || !/^\\d+$/.test(eventId)) {
+      return res.status(400).json({ error: "Invalid match" });
+    }
+    const base = `https://site.api.espn.com/apis/site/v2/sports/soccer/${league}`;
+    try {
+      const summary = await soccerFetch(`${base}/summary`, { event: eventId });
+      const teams = (summary.header?.competitions?.[0]?.competitors || []).map((c: any) => ({
+        id: String(c.team?.id || c.id), name: c.team?.displayName || c.team?.name || "Unknown club",
+        logo: c.team?.logo || c.team?.logos?.[0]?.href || null,
+        homeAway: c.homeAway
+      }));
+      if (teams.length !== 2) return res.status(502).json({ error: "Match teams could not be verified" });
+      const rosterResults = await Promise.all(teams.map(async (team: any) => {
+        try {
+          const data = await soccerFetch(`${base}/teams/${encodeURIComponent(team.id)}/roster`);
+          const groups = Array.isArray(data.athletes) ? data.athletes : [];
+          const athletes = groups.flatMap((group: any) => Array.isArray(group.items) ? group.items : [group])
+            .filter((p: any) => p?.id && p?.displayName)
+            .map((p: any) => ({
+              id: String(p.id), name: p.displayName,
+              position: p.position?.abbreviation || p.position?.displayName || "",
+              jersey: p.jersey || null, headshot: p.headshot?.href || null
+            }));
+          return { ...team, players: athletes, rosterAvailable: athletes.length > 0 };
+        } catch { return { ...team, players: [], rosterAvailable: false }; }
+      }));
+      // Event lineups are authoritative for who is actually playing. Never
+      // substitute a roster member for a confirmed starter.
+      const lineupByTeam = new Map<string, any[]>();
+      for (const c of summary.boxscore?.players || []) {
+        const id = String(c.team?.id || "");
+        const athletes = (c.statistics || []).flatMap((g: any) => g.athletes || []);
+        if (id && athletes.length) lineupByTeam.set(id, athletes.map((p: any) => ({
+          id: String(p.athlete?.id || ""), name: p.athlete?.displayName || "",
+          starter: p.starter === true, played: p.didNotPlay !== true
+        })).filter((p: any) => p.id && p.name));
+      }
+      return res.json({ eventId, source: "ESPN", teams: rosterResults.map((t: any) => ({
+        ...t, lineup: lineupByTeam.get(t.id) || [], lineupConfirmed: lineupByTeam.has(t.id)
+      })) });
+    } catch (error: any) {
+      console.warn("UEFA match details unavailable:", error.message);
+      return res.status(503).json({ error: "Match details temporarily unavailable" });
     }
   });
 
