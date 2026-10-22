@@ -1082,7 +1082,7 @@ async function startServer() {
   });
 
   // Temporary UEFA match center: verified team IDs, logos, rosters and event lineups.
-  const soccerLeagues = ["uefa.europa", "uefa.europa.conf"];
+  const soccerLeagues = ["uefa.europa", "uefa.europa.conf", "uefa.champions", "eng.1", "esp.1"];
   const soccerCache = new Map<string, { until: number; data: any }>();
   const soccerFetch = async (url: string, params?: Record<string, any>) => {
     const key = url + JSON.stringify(params || {});
