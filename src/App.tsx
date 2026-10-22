@@ -1975,6 +1975,10 @@ function TemporarySoccerView() {
                 <p className="text-xs text-zinc-400">Recent wins: {context.recentWins}/{side === 'Home' ? sim.samples.home : sim.samples.away}</p>
                 {context.standing ? <p className="text-xs text-zinc-300">{context.standing.league} · League rank: {context.standing.rank ?? 'N/A'} · W/D/L: {context.standing.wins ?? '—'}/{context.standing.draws ?? '—'}/{context.standing.losses ?? '—'} · Points: {context.standing.points ?? '—'}</p> : <p className="text-xs text-zinc-500">Domestic league standing unavailable</p>}
                 <p className="text-xs text-zinc-500">Sources: {(context.leagues || []).join(', ') || 'None verified'}</p>
+                <p className="text-xs font-bold text-emerald-400">Key players · team stat leaders</p>
+                {context.keyPlayers?.length ? context.keyPlayers.map((p: any, i: number) =>
+                  <p key={p.id + i} className="text-xs text-zinc-300">{p.name} · {p.metric}{p.value ? ': ' + p.value : ''}</p>
+                ) : <p className="text-xs text-zinc-500">No verified club leaders returned</p>}
                 <p className="text-xs font-bold text-amber-400">Reported injuries</p>
                 {context.injuries?.length ? context.injuries.map((inj: any, i: number) => <p key={i} className="text-xs text-zinc-300">{inj.name} · {typeof inj.status === 'string' ? inj.status : 'Status reported'}</p>) : <p className="text-xs text-zinc-500">No injury reports returned; not confirmation of full fitness</p>}
               </div>)}
