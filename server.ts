@@ -1442,6 +1442,64 @@ async function startServer() {
     }
   });
 
+  // Optional licensed sportsbook odds feed. Keep the API key server-side.
+  // Returns only real quotes; no fabricated odds or payout estimates.
+  const sportsbookSportKeys: Record<string, string> = {
+    NBA: "basketball_nba", MLB: "baseball_mlb", NFL: "americanfootball_nfl",
+    EPL: "soccer_epl", LALIGA: "soccer_spain_la_liga",
+    UCL: "soccer_uefa_champs_league", EUROPA: "soccer_uefa_europa_league"
+  };
+  const sportsbookOddsCache = new Map<string, { expires: number; data: any }>();
+  app.get("/api/sportsbook/odds", async (req, res) => {
+    const sport = String(req.query.sport || "NBA").toUpperCase();
+    const sportKey = sportsbookSportKeys[sport];
+    if (!sportKey) return res.status(400).json({ error: "Unsupported sport" });
+    const key = process.env.THE_ODDS_API_KEY?.trim();
+    if (!key) return res.status(503).json({
+      configured: false,
+      error: "Live sportsbook odds require THE_ODDS_API_KEY in server environment variables."
+    });
+    const cached = sportsbookOddsCache.get(sport);
+    if (cached && cached.expires > Date.now()) return res.json(cached.data);
+    try {
+      const response = await axios.get("https://api.theoddsapi.com/odds/", {
+        headers: { "x-api-key": key },
+        params: { sport_key: sportKey, regions: "us", bookmakers: "draftkings,fanduel,betmgm,williamhill_us",
+          markets: "h2h,spreads,totals", oddsFormat: "american" },
+        timeout: 12000
+      });
+      const raw = Array.isArray(response.data?.data) ? response.data.data :
+        Array.isArray(response.data) ? response.data : [];
+      const events = raw.map((event: any) => ({
+        id: String(event.id || ""), homeTeam: event.home_team || event.homeTeam || "",
+        awayTeam: event.away_team || event.awayTeam || "",
+        commenceTime: event.commence_time || event.start_time || null,
+        bookmakers: (event.bookmakers || []).map((book: any) => ({
+          key: book.key || book.book || "", title: book.title || book.book || book.key || "",
+          lastUpdate: book.last_update || book.lastUpdate || null,
+          markets: (book.markets || []).map((market: any) => ({
+            key: market.key,
+            outcomes: (market.outcomes || []).map((o: any) => ({
+              name: o.name, price: o.price, point: o.point ?? null
+            }))
+          }))
+        }))
+      }));
+      const payload = { configured: true, sport, source: "TheOddsAPI", fetchedAt: new Date().toISOString(),
+        markets: ["h2h", "spreads", "totals"], playerPropsIncluded: false, events };
+      sportsbookOddsCache.set(sport, { expires: Date.now() + 60_000, data: payload });
+      return res.json(payload);
+    } catch (error: any) {
+      const status = Number(error.response?.status);
+      console.warn("Sportsbook odds provider error:", status || error.message);
+      return res.status(status === 401 || status === 403 ? 502 : 503).json({
+        error: status === 403 ? "Your odds API plan does not include this sport or market." :
+          status === 429 ? "Odds provider rate limit reached. Try again later." :
+          "Live sportsbook odds unavailable. No odds were estimated."
+      });
+    }
+  });
+
   app.get("/api/parlay/generate", async (req, res) => {
     const sport = String(req.query.sport || "MLB").toUpperCase();
     const legCount = Math.min(6, Math.max(2, parseInt(String(req.query.legs), 10) || 3));
