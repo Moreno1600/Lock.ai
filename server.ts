@@ -1465,28 +1465,41 @@ async function startServer() {
       const response = await axios.get("https://api.theoddsapi.com/odds/", {
         headers: { "x-api-key": key },
         params: { sport_key: sportKey, regions: "us", bookmakers: "draftkings,fanduel,betmgm,williamhill_us",
-          markets: "h2h,spreads,totals", oddsFormat: "american" },
+          markets: "h2h", oddsFormat: "american" },
         timeout: 12000
       });
       const raw = Array.isArray(response.data?.data) ? response.data.data :
         Array.isArray(response.data) ? response.data : [];
-      const events = raw.map((event: any) => ({
-        id: String(event.id || ""), homeTeam: event.home_team || event.homeTeam || "",
-        awayTeam: event.away_team || event.awayTeam || "",
-        commenceTime: event.commence_time || event.start_time || null,
-        bookmakers: (event.bookmakers || []).map((book: any) => ({
-          key: book.key || book.book || "", title: book.title || book.book || book.key || "",
-          lastUpdate: book.last_update || book.lastUpdate || null,
-          markets: (book.markets || []).map((market: any) => ({
-            key: market.key,
-            outcomes: (market.outcomes || []).map((o: any) => ({
-              name: o.name, price: o.price, point: o.point ?? null
-            }))
-          }))
-        }))
-      }));
+      const events = raw.map((event: any) => {
+        // TheOddsAPI uses event.markets[].books[] (not the older
+        // bookmakers[].markets[] format used by some other providers).
+        const byBook = new Map<string, any>();
+        for (const market of (event.markets || [])) {
+          for (const book of (market.books || [])) {
+            const bookKey = String(book.book || book.key || "");
+            if (!bookKey) continue;
+            if (!byBook.has(bookKey)) byBook.set(bookKey, {
+              key: bookKey, title: book.title || bookKey,
+              lastUpdate: book.last_update || book.lastUpdate || null, markets: []
+            });
+            byBook.get(bookKey).markets.push({
+              key: market.market || market.key,
+              outcomes: (book.outcomes || []).map((o: any) => ({
+                name: o.name, price: o.price, point: o.point ?? null
+              }))
+            });
+          }
+        }
+        return {
+          id: String(event.event_id || event.id || ""),
+          homeTeam: event.home_team || event.homeTeam || "",
+          awayTeam: event.away_team || event.awayTeam || "",
+          commenceTime: event.start_time || event.commence_time || null,
+          bookmakers: [...byBook.values()]
+        };
+      });
       const payload = { configured: true, sport, source: "TheOddsAPI", fetchedAt: new Date().toISOString(),
-        markets: ["h2h", "spreads", "totals"], playerPropsIncluded: false, events };
+        markets: ["h2h"], playerPropsIncluded: false, events };
       sportsbookOddsCache.set(sport, { expires: Date.now() + 60_000, data: payload });
       return res.json(payload);
     } catch (error: any) {
