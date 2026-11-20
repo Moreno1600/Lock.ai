@@ -149,7 +149,7 @@ export function summarizeSportsbookMarket(event: EventOdds): MatchedMarket {
     event.markets.filter(m => m.market === market).flatMap(q => {
       const a = q.outcomes.find(x => x.name.toLowerCase() === aName.toLowerCase());
       const b = q.outcomes.find(x => x.name.toLowerCase() === bName.toLowerCase() &&
-        (a?.point === null || x.point === null || x.point === a.point));
+        (market === "spreads" ? a?.point !== null && x.point === -a.point : a?.point === null || x.point === null || x.point === a.point));
       return a && b ? [{ q, a, b }] : [];
     });
   const twoWay = findPair("h2h", event.away, event.home);
