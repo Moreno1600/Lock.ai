@@ -1,6 +1,7 @@
 import axios from "axios";
 import type { Express } from "express";
 import { fetchSportsbookOdds, matchSportsbookEvent, summarizeSportsbookMarket } from "./oddsFeed.js";
+import { loadTeamHistory, loadScoreboardFallback, type HistoryTeam, type HistoryGame } from "./slateHistory.js";
 
 /**
  * Lock.ai Slate Lab: transparent 10,000-draw, team-level simulations.
@@ -12,14 +13,17 @@ type Sport = "NBA" | "NFL";
 type ScoredGame = { date: string; scored: number; allowed: number; lastGameLeader?: string };
 type Team = { id: string; name: string; abbrev: string; homeAway: string };
 const API = "https://site.api.espn.com/apis/site/v2/sports";
-const cache = new Map<string, { expires: number; data: any }>();
-const http = async (url: string, params: Record<string, any> = {}) => {
+const cache = new Map<string, { expires: number; pending: Promise<any> }>();
+const http = (url: string, params: Record<string, any> = {}) => {
   const key = url + JSON.stringify(params);
   const old = cache.get(key);
-  if (old && old.expires > Date.now()) return old.data;
-  const response = await axios.get(url, { params, timeout: 12000 });
-  cache.set(key, { expires: Date.now() + 90_000, data: response.data });
-  return response.data;
+  if (old && old.expires > Date.now()) return old.pending;
+  const pending = axios.get(url, { params, timeout: 9000 }).then(r => r.data).catch(error => {
+    cache.delete(key);
+    throw error;
+  });
+  cache.set(key, { expires: Date.now() + 120_000, pending });
+  return pending;
 };
 const dayKey = (iso: string) => {
   const pieces = new Intl.DateTimeFormat("en-US", {
@@ -41,7 +45,6 @@ const completed = (event: any) =>
 const average = (values: number[]) => values.reduce((sum, n) => sum + n, 0) / values.length;
 const rounded = (value: number) => Math.round(value * 10) / 10;
 const pct = (count: number) => rounded(count / 100);
-const fresh = (value: any) => value && typeof value === "object" && !Array.isArray(value);
 const numAmerican = (value: any): number | null => {
   if (value === undefined || value === null) return null;
   const n = Number(String(value).replace(/[^0-9+.-]/g, ""));
@@ -68,33 +71,6 @@ function parseMarket(event: any) {
     noVigHome: rounded(100 * homeImp / (awayImp + homeImp)),
     source: odds.provider?.name || odds.provider?.displayName || "ESPN-listed market"
   };
-}
-async function recentGames(sport: Sport, team: Team): Promise<ScoredGame[]> {
-  const base = sport === "NBA" ? "basketball/nba" : "football/nfl";
-  const data = await http(API + "/" + base + "/teams/" + encodeURIComponent(team.id) + "/schedule");
-  const rows: ScoredGame[] = [];
-  for (const event of data.events || []) {
-    if (!completed(event)) continue;
-    const teams = event.competitions?.[0]?.competitors || [];
-    const own = teams.find((t: any) => String(t.id ?? t.team?.id) === team.id) ||
-      teams.find((t: any) => t.team?.abbreviation === team.abbrev);
-    const other = teams.find((t: any) => t !== own);
-    const scored = getScore(own), allowed = getScore(other);
-    if (scored === null || allowed === null || !event.date) continue;
-    if (event.date > new Date().toISOString()) continue;
-    const statGroup = (own?.leaders || []).find((g: any) => Array.isArray(g.leaders) && g.leaders.length) || null;
-    const statLeader = statGroup?.leaders?.[0];
-    const athleteName = statLeader?.athlete?.displayName || statLeader?.athlete?.fullName;
-    const lastGameLeader = athleteName
-      ? String(athleteName) + " (" + team.abbrev + "): led a recent completed game in " +
-        String(statGroup.displayName || statGroup.name || "a team statistic") +
-        (statLeader.displayValue ? " (" + statLeader.displayValue + ")" : "") +
-        "; current injury status and matchup usage unverified"
-      : undefined;
-    rows.push({ date: event.date, scored, allowed, lastGameLeader });
-  }
-  rows.sort((a, b) => b.date.localeCompare(a.date));
-  return rows.slice(0, sport === "NBA" ? 12 : 8);
 }
 async function leader(sport: Sport, team: Team): Promise<string | null> {
   const path = sport === "NBA" ? "basketball/nba" : "football/nfl";
@@ -217,7 +193,7 @@ export function registerSlateLab(app: Express) {
     }
     const key = "slate:" + sport + ":" + date;
     const existing = cache.get(key);
-    if (existing && existing.expires > Date.now()) return res.json(existing.data);
+    if (existing && existing.expires > Date.now()) return res.json(await existing.pending);
     try {
       const league = sport === "NBA" ? "basketball/nba" : "football/nfl";
       const source = await http(API + "/" + league + "/scoreboard",
@@ -233,6 +209,29 @@ export function registerSlateLab(app: Express) {
         const current = Date.UTC(+dateOfGame.slice(0, 4), +dateOfGame.slice(4, 6) - 1, +dateOfGame.slice(6, 8));
         return current >= first && current < first + 7 * 86_400_000;
       }).slice(0, 25);
+      // Build a shared verified-result pool once per slate so missing team-schedule
+      // scores can be recovered from completed league scoreboards without duplicate calls.
+      const allTeams = new Map<string, HistoryTeam>();
+      for (const event of events) {
+        const pair = teamsForEvent(event);
+        if (pair) {
+          allTeams.set(pair.away.id, pair.away);
+          allTeams.set(pair.home.id, pair.home);
+        }
+      }
+      const teamList = [...allTeams.values()];
+      let histories: Record<string, HistoryGame[]> = {};
+      for (let index = 0; index < teamList.length; index += 5) {
+        const batch = await Promise.allSettled(teamList.slice(index,index + 5)
+          .map(team => loadTeamHistory(sport, team, new Date().toISOString(), http)));
+        batch.forEach((result,i) => {
+          const team = teamList[index + i];
+          histories[team.id] = result.status === "fulfilled" ? result.value : [];
+        });
+      }
+      if (teamList.length) {
+        histories = await loadScoreboardFallback(sport, teamList, new Date().toISOString(), http, histories);
+      }
       // Bound ESPN requests to three games at a time.
       const games: any[] = [];
       for (let index = 0; index < events.length; index += 3) {
@@ -254,33 +253,35 @@ export function registerSlateLab(app: Express) {
           source: trustedTotal || trustedMoneyline || quoted?.spread?.fresh ? "TheOddsAPI" : espnMarket.source
         };
         const missing: string[] = [];
-        if (sportsbook.status !== "connected") missing.push("Sportsbook feed: " + sportsbook.message);
-        else if (!providerEvent) missing.push("No verified cross-provider matchup and kickoff match");
-        else if (!trustedMoneyline) missing.push("Fresh two-sided same-book moneyline prices unavailable; no market gap asserted");
+        // Provider connection failures belong in one top-level diagnostic, not on every game.
+        if (sportsbook.status === "connected" && !providerEvent) missing.push("No matched sportsbook lines for this game");
+        else if (sportsbook.status === "connected" && !trustedMoneyline) missing.push("Fresh two-sided moneyline prices unavailable");
         if (quoted?.total && !quoted.total.fresh) missing.push("Provider totals quote timestamp is stale or missing");
         if (quoted?.moneyline && !quoted.moneyline.fresh) missing.push("Provider moneyline quote timestamp is stale or missing");
         let model: any = null;
         let players: string[] = [];
-        const [a, h, aLeader, hLeader] = await Promise.allSettled([
-          recentGames(sport, pair.away), recentGames(sport, pair.home),
-          leader(sport, pair.away), leader(sport, pair.home)
+        const af = histories[pair.away.id] || [];
+        const hf = histories[pair.home.id] || [];
+        const [aLeader, hLeader] = await Promise.allSettled([
+          af.some(g => g.lastGameLeader) ? Promise.resolve(null) : leader(sport, pair.away),
+          hf.some(g => g.lastGameLeader) ? Promise.resolve(null) : leader(sport, pair.home)
         ]);
-        const af = a.status === "fulfilled" ? a.value : [];
-        const hf = h.status === "fulfilled" ? h.value : [];
         const minSample = sport === "NBA" ? 5 : 4;
         if (af.length < minSample || hf.length < minSample) {
           missing.push("Insufficient verified recent game scores (needs " + minSample + "+ per team)");
         } else model = simulation(sport, af, hf, market.total);
-        if (aLeader.status === "fulfilled" && aLeader.value) players.push(aLeader.value);
-        else if (af[0]?.lastGameLeader) players.push(af[0].lastGameLeader);
-        if (hLeader.status === "fulfilled" && hLeader.value) players.push(hLeader.value);
-        else if (hf[0]?.lastGameLeader) players.push(hf[0].lastGameLeader);
+        const awayContext = af.find(g => g.lastGameLeader)?.lastGameLeader;
+        const homeContext = hf.find(g => g.lastGameLeader)?.lastGameLeader;
+        if (awayContext) players.push(awayContext);
+        else if (aLeader.status === "fulfilled" && aLeader.value) players.push(aLeader.value);
+        if (homeContext) players.push(homeContext);
+        else if (hLeader.status === "fulfilled" && hLeader.value) players.push(hLeader.value);
         if (!players.length) missing.push("Verified individual player usage and team leaders");
         if (market.total === null) missing.push("Verified pregame total");
         if (market.spread === null) missing.push("Verified pregame spread");
-        missing.push("Confirmed injuries/lineups, rotations and coaching tendencies not incorporated");
+        missing.push("Detailed injuries, rotations and coaching tendencies are not yet modeled");
         if (sport === "NFL") missing.push("Verified outdoor weather and play-level red-zone roles not incorporated");
-        missing.push("Player-prop and anytime-TD model not yet wired: no qualifying player-prop edge or player-specific TD hit rate can be asserted");
+        missing.push("Player-prop and anytime-TD models are not yet connected");
         // NFL markets are generally two-way, so remove model ties before a two-way comparison.
         const winSum = model ? model.winAway + model.winHome : 0;
         const comparableAway = model && sport === "NFL" && winSum > 0 ? rounded(100 * model.winAway / winSum) : model?.winAway;
@@ -312,11 +313,11 @@ export function registerSlateLab(app: Express) {
       const payload = {
         sport, date, fetchedAt: new Date().toISOString(), games: games.filter(Boolean),
         sportsbook: { status: sportsbook.status, message: sportsbook.message, fetchedAt: sportsbook.fetchedAt },
-        note: "10,000 synthetic possession/drive trials per game from verified recent ESPN team scores. NBA uses a roughly 98-possession and 1.5-point home prior; NFL uses a roughly 11-drive and 1.2-point home prior. These are assumptions, not measured game tendencies. This is NOT actual play-by-play simulation, not adjusted for confirmed current injuries/weather/rotations/coaching, and not a calibrated betting model. Missing market data never becomes a fabricated edge.",
+        note: "Exploratory 10,000-trial team scoring model using ESPN completed game scores. Not a calibrated play-by-play model; player roles, injuries, and weather are not included. Market data is optional.",
         dataSource: "ESPN public game and team history; TheOddsAPI market prices where securely configured and matchable",
         window: sport === "NBA" ? "Selected calendar day" : "Selected day plus the next six days"
       };
-      cache.set(key, { expires: Date.now() + 90_000, data: payload });
+      cache.set(key, { expires: Date.now() + 90_000, pending: Promise.resolve(payload) });
       return res.json(payload);
     } catch (error: any) {
       console.warn("Edge Lab slate unavailable", error.message);
