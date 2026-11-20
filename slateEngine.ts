@@ -288,9 +288,14 @@ export function registerSlateLab(app: Express) {
           { team: pair.away.name, gap: rounded(comparableAway - market.noVigAway), sim: comparableAway, market: market.noVigAway },
           { team: pair.home.name, gap: rounded(comparableHome - market.noVigHome), sim: comparableHome, market: market.noVigHome }
         ].filter(v => v.gap >= 8).sort((x, y) => y.gap - x.gap) : [];
-        const totalGap = model && trustedTotal ? [
-          { side: "Over", line: trustedTotal.line, gap: rounded(model.over - trustedTotal.noVigOver), sim: model.over, market: trustedTotal.noVigOver },
-          { side: "Under", line: trustedTotal.line, gap: rounded(model.under - trustedTotal.noVigUnder), sim: model.under, market: trustedTotal.noVigUnder }
+        // Two-way totals markets refund pushes. Compare on the non-push outcomes only.
+        const nonPushTotal = model && model.over !== null && model.under !== null
+          ? model.over + model.under : 0;
+        const comparableOver = nonPushTotal > 0 ? rounded(100 * model.over / nonPushTotal) : null;
+        const comparableUnder = nonPushTotal > 0 ? rounded(100 * model.under / nonPushTotal) : null;
+        const totalGap = model && trustedTotal && comparableOver !== null && comparableUnder !== null ? [
+          { side: "Over", line: trustedTotal.line, gap: rounded(comparableOver - trustedTotal.noVigOver), sim: comparableOver, market: trustedTotal.noVigOver },
+          { side: "Under", line: trustedTotal.line, gap: rounded(comparableUnder - trustedTotal.noVigUnder), sim: comparableUnder, market: trustedTotal.noVigUnder }
         ].filter(v => v.gap >= 8).sort((x, y) => y.gap - x.gap) : [];
         return {
           id: String(event.id), date: event.date, sport, away: pair.away.name, home: pair.home.name,
