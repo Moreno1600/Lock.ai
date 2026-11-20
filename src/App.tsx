@@ -872,7 +872,7 @@ export default function App() {
             )}
 
             {activeTab === 'soccer' ? (
-              <TemporarySoccerView />
+              <SoccerView />
             ) : activeTab === 'favorites' ? (
               <FavoritesView favorites={favorites} setFavorites={setFavorites} sport={sport} />
             ) : activeTab === 'optimizer' ? (
@@ -1862,7 +1862,7 @@ export default function App() {
 );
 }
 
-function TemporarySoccerView() {
+function SoccerView() {
   type Club = { id: string; name: string; logo: string | null; homeAway?: string; score?: string };
   type Fixture = { id: string; name: string; date: string; status?: { type?: { description?: string } }; competitors: Club[] };
   type PlayerInfo = { id: string; name: string; position?: string; jersey?: string | null; headshot?: string | null; starter?: boolean };
@@ -1871,7 +1871,11 @@ function TemporarySoccerView() {
   const [matches, setMatches] = useState<Fixture[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
-  const [date, setDate] = useState('20261022');
+  const todayDateKey = () => {
+    const now = new Date();
+    return `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}`;
+  };
+  const [date, setDate] = useState(todayDateKey);
   const [selected, setSelected] = useState<string | null>(null);
   const [details, setDetails] = useState<{ teams: ClubDetails[] } | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
@@ -1940,9 +1944,15 @@ function TemporarySoccerView() {
             className={cn('shrink-0 whitespace-nowrap rounded-xl px-4 py-3 text-xs font-bold transition-colors', competition === id ? 'bg-emerald-500 text-black' : 'bg-zinc-800 text-zinc-300 hover:bg-zinc-700')}>{name}</button>
         )}
       </div>
-      <input aria-label="Match date" type="date" value={date.slice(0,4)+'-'+date.slice(4,6)+'-'+date.slice(6,8)}
-        onChange={e => setDate(e.target.value.replace(/-/g,''))}
-        className="shrink-0 rounded-xl bg-zinc-800 px-3 py-3 text-xs text-white" />
+      <div className="flex items-center gap-2">
+        <button type="button" onClick={() => setDate(todayDateKey())}
+          className="shrink-0 rounded-xl bg-zinc-800 px-3 py-3 text-xs font-bold text-emerald-400 hover:bg-zinc-700">
+          Today
+        </button>
+        <input aria-label="Match date" type="date" value={date.slice(0,4)+'-'+date.slice(4,6)+'-'+date.slice(6,8)}
+          onChange={e => { if (e.target.value) setDate(e.target.value.replace(/-/g,'')); }}
+          className="min-w-0 shrink rounded-xl bg-zinc-800 px-3 py-3 text-xs text-white" />
+      </div>
     </div>
     {loading ? <p className="text-zinc-400">Loading fixtures...</p> : error ? <p className="text-red-400">{error}</p> :
       !matches.length ? <p className="text-zinc-400">No fixtures found for this date and competition.</p> :
