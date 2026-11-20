@@ -58,7 +58,9 @@ export async function loadTeamHistory(
   sport: HistorySport, team: HistoryTeam, beforeISO: string, fetchJson: FetchJson
 ): Promise<HistoryGame[]> {
   const path = root + "/" + league(sport);
-  const season = Number(beforeISO.slice(0, 4)) + (sport === "NBA" && Number(beforeISO.slice(5, 7)) >= 7 ? 1 : 0);
+  const year = Number(beforeISO.slice(0, 4));
+  const month = Number(beforeISO.slice(5, 7));
+  const season = sport === "NBA" ? year + (month >= 7 ? 1 : 0) : year - (month <= 2 ? 1 : 0);
   const results = new Map<string, HistoryGame>();
   for (const year of [season, season - 1]) {
     if (results.size >= (sport === "NBA" ? 8 : 5)) break;
