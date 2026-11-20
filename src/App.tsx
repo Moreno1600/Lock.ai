@@ -15,9 +15,13 @@ interface Player {
   starter?: boolean;
   statistics?: {
     seasonAverages?: {
-      ppg: string;
-      rpg: string;
-      apg: string;
+      ppg?: string;
+      rpg?: string;
+      apg?: string;
+      passYds?: string;
+      rushYds?: string;
+      recYds?: string;
+      avg?: string;
     }
   }
 }
