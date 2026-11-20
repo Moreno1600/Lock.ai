@@ -1,6 +1,6 @@
 import axios from "axios";
 
-// Uses TheOddsAPI /odds/ (theoddsapi.com), not the similarly named v4 service.
+// Uses TheOddsAPI /odds/ (theoddsapi.com), not the similarly named odds-api.io or v4 service.
 // Read the API key only on the server, never send it to the browser or logs.
 export type OddsSport = "NBA" | "NFL";
 type Outcome = { name: string; price: number; point: number | null };
@@ -85,7 +85,7 @@ async function getFeed(sport: OddsSport): Promise<OddsFeed> {
     bookmakers: "draftkings,fanduel,betmgm,caesars", oddsFormat: "american"
   };
   try {
-    const base = "https://api.theoddsapi.com/odds/";
+    const base = "https://api.bettingdataapi.com/odds/";
     let response;
     try {
       response = await axios.get(base, { headers: { "x-api-key": key }, params, timeout: 12000 });
@@ -96,6 +96,7 @@ async function getFeed(sport: OddsSport): Promise<OddsFeed> {
         headers: { "x-api-key": key }, params: { ...params, markets: "h2h" }, timeout: 12000
       });
     }
+    if (response.data?.success === false) throw new Error("Odds provider returned unsuccessful response");
     const events = normalizePayload(response.data);
     return { status: "connected", message: events.length ? "Odds loaded from TheOddsAPI." : "Provider connected; no priced upcoming games returned.",
       fetchedAt: new Date().toISOString(), events };
@@ -147,12 +148,12 @@ export function summarizeSportsbookMarket(event: EventOdds): MatchedMarket {
   type Found = { q: Market; a: Outcome; b: Outcome };
   const findPair = (market: string, aName: string, bName: string): Found[] =>
     event.markets.filter(m => m.market === market).flatMap(q => {
-      const a = q.outcomes.find(x => x.name.toLowerCase() === aName.toLowerCase());
-      const b = q.outcomes.find(x => x.name.toLowerCase() === bName.toLowerCase() &&
+      const a = q.outcomes.find(x => nickname(x.name) === nickname(aName));
+      const b = q.outcomes.find(x => nickname(x.name) === nickname(bName) &&
         (market === "spreads" ? a?.point !== null && x.point === -a.point : a?.point === null || x.point === null || x.point === a.point));
       return a && b ? [{ q, a, b }] : [];
     });
-  const twoWay = findPair("h2h", event.away, event.home);
+  const twoWay = findPair("h2h", event.away, event.home).filter(x => x.a.name !== x.b.name);
   const selected = choose(twoWay.map(x => x.q));
   const money = twoWay.find(x => x.q === selected);
   const totalQuotes = event.markets.filter(x => x.market === "totals").flatMap(q => {
