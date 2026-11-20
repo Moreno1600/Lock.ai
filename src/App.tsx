@@ -309,7 +309,7 @@ export default function App() {
   useEffect(() => {
     localStorage.setItem('lockai-favorites', JSON.stringify(favorites));
   }, [favorites]);
-  const [activeTab, setActiveTab] = useState<'home' | 'favorites' | 'optimizer' | 'import' | 'tos'>('home');
+  const [activeTab, setActiveTab] = useState<'home' | 'favorites' | 'optimizer' | 'edge-lab' | 'import' | 'tos'>('home');
 
   // Season availability — off-season sports show an unavailable notice instead of fake data
   const [seasonStatus, setSeasonStatus] = useState<Record<string, { active: boolean; resumes: string }> | null>(null);
@@ -651,6 +651,12 @@ export default function App() {
             label="Optimizer"
           />
           <SidebarIcon
+            icon={Target}
+            active={activeTab === 'edge-lab'}
+            onClick={() => { setActiveTab('edge-lab'); setSelectedPlayer(null); }}
+            label="Slate Lab"
+          />
+          <SidebarIcon
             icon={Bookmark} 
             active={activeTab === 'favorites'} 
             onClick={() => setActiveTab('favorites')} 
@@ -848,7 +854,9 @@ export default function App() {
               </>
             )}
 
-            {activeTab === 'favorites' ? (
+            {activeTab === 'edge-lab' ? (
+              <SlateLabView sport={sport} />
+            ) : activeTab === 'favorites' ? (
               <FavoritesView favorites={favorites} setFavorites={setFavorites} sport={sport} />
             ) : activeTab === 'optimizer' ? (
               <OptimizerView favorites={favorites} setFavorites={setFavorites} setActiveTab={setActiveTab} sport={sport} seasonStatus={seasonStatus} />
@@ -1835,6 +1843,123 @@ export default function App() {
     </div>
   </div>
 );
+}
+
+type SlateAnalysisGame = {
+  id: string; date: string; sport: "NBA" | "NFL"; home: string; away: string;
+  line: string | null; totalLine: number | null; marketSource: string | null;
+  model: null | {
+    runs: number; winAway: number; winHome: number; tie: number;
+    over: number | null; under: number | null;
+    projectedAway: number; projectedHome: number;
+    samples: { away: number; home: number };
+  };
+  players: string[];
+  anytimeTouchdowns: Array<{ name: string; probability: number }>;
+  playerPropEdges: Array<{ player: string; market: string; probability: number; noVigMarket: number; edge: number; reason: string }>;
+  moneylineWatch: Array<{ team: string; gap: number; sim: number; market: number }>;
+  missing: string[];
+};
+function SlateLabView({ sport }: { sport: Sport }) {
+  const getToday = () => {
+    const fields = new Intl.DateTimeFormat('en-US', { timeZone: 'America/Chicago', year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(new Date());
+    const value = (type: string) => fields.find(p => p.type === type)?.value || '';
+    return value('year') + value('month') + value('day');
+  };
+  const [date, setDate] = useState(getToday);
+  const [analysis, setAnalysis] = useState<{ games: SlateAnalysisGame[]; note: string; fetchedAt: string; window: string } | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+  const [refreshKey, setRefreshKey] = useState(0);
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true); setError(''); setAnalysis(null);
+    axios.get('/api/edge-lab/slate', { params: { sport, date } })
+      .then(r => { if (!cancelled) setAnalysis(r.data); })
+      .catch(e => { if (!cancelled) setError(e.response?.data?.error || 'Verified slate data unavailable.'); })
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
+  }, [sport, date, refreshKey]);
+  const percent = (v: number | null | undefined) => typeof v === 'number' && Number.isFinite(v) ? v.toFixed(1) + '%' : 'Unverified';
+  const dateInput = date.slice(0,4) + '-' + date.slice(4,6) + '-' + date.slice(6,8);
+  return <div className="max-w-6xl mx-auto space-y-6 pb-10">
+    <div className="flex flex-wrap items-center justify-between gap-4">
+      <div className="space-y-1">
+        <div className="flex items-center gap-2 text-emerald-400 text-xs font-black uppercase tracking-widest"><Target className="w-4 h-4" /> Lock.ai Slate Lab</div>
+        <h2 className="text-3xl md:text-4xl font-black tracking-tight text-white">10,000-Run Matchup Analysis</h2>
+        <p className="text-xs text-zinc-400">NBA & NFL · verified recent team results · transparent synthetic possession/drive model</p>
+      </div>
+      <div className="flex flex-wrap items-center gap-2">
+        <button type="button" onClick={() => setDate(getToday())} className="rounded-xl border border-zinc-700 bg-zinc-900 px-4 py-3 text-xs font-black text-emerald-400 hover:border-emerald-600">Today</button>
+        <input aria-label="Slate date" type="date" value={dateInput}
+          onChange={e => { if (e.target.value) setDate(e.target.value.replace(/-/g, '')); }}
+          className="rounded-xl border border-zinc-700 bg-zinc-900 px-3 py-3 text-xs text-zinc-200" />
+        <button type="button" onClick={() => setRefreshKey(n => n + 1)}
+          disabled={loading} className="rounded-xl bg-emerald-500 px-4 py-3 text-xs font-black text-black disabled:opacity-50">
+          {loading ? 'Loading…' : 'Refresh'}
+        </button>
+      </div>
+    </div>
+    <div className="rounded-xl border border-amber-500/20 bg-amber-500/5 p-4 text-xs text-amber-200 leading-relaxed">
+      <strong>Accuracy note:</strong> These are 10,000 simplified Monte Carlo draws per eligible game, not a fully calibrated play-by-play engine.
+      Injuries, confirmed minutes/snaps, coaching, outdoor weather, and live player-prop prices are not verified here.
+      Unpriced props and anytime-TD rates are withheld instead of guessed.
+    </div>
+    {loading && <div className="rounded-xl border border-zinc-800 bg-zinc-900/70 p-8 text-sm text-zinc-400">Loading real fixtures and verified team histories, then running 10,000 trials per game…</div>}
+    {!loading && error && <div className="rounded-xl border border-red-500/20 bg-red-500/5 p-6 text-sm text-red-300">{error}</div>}
+    {!loading && analysis && !analysis.games?.length && <div className="rounded-xl border border-zinc-800 bg-zinc-900/70 p-8 space-y-2">
+      <p className="font-bold text-white">No upcoming eligible {sport} games in this window.</p>
+      <p className="text-sm text-zinc-400">{sport === 'NBA' ? 'Pick another day above to analyze another NBA slate.' : 'NFL looks at the selected day and the next six days. Try the beginning of the game week.'} Final games are excluded from pregame simulations.</p>
+    </div>}
+    {analysis?.games?.map(game => <section key={game.id} className="rounded-2xl border border-zinc-800 bg-zinc-900/55 p-5 md:p-6 space-y-4">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <h3 className="text-xl font-black text-white">{game.away} @ {game.home}</h3>
+        <span className="text-xs text-zinc-500">{new Date(game.date).toLocaleString('en-US',{ timeZone:'America/Chicago', month:'short', day:'numeric', hour:'numeric', minute:'2-digit' })} CT</span>
+      </div>
+      <p className="text-sm text-zinc-300"><strong className="text-white">Line:</strong> {game.line || 'Unverified'} | <strong className="text-white">Total:</strong> {game.totalLine ?? 'Unverified'}{game.marketSource ? <span className="text-zinc-500"> · {game.marketSource}</span> : null}</p>
+      {game.model ? <>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+          <div className="rounded-xl bg-zinc-950/70 p-4 space-y-2">
+            <div className="text-xs text-zinc-500 uppercase font-black">Win Probability</div>
+            <p className="font-bold text-zinc-200">{game.away} <span className="text-emerald-400">{percent(game.model.winAway)}</span></p>
+            <p className="font-bold text-zinc-200">{game.home} <span className="text-emerald-400">{percent(game.model.winHome)}</span></p>
+            {game.sport === 'NFL' && <p className="text-xs text-zinc-500">Tie: {percent(game.model.tie)}</p>}
+          </div>
+          <div className="rounded-xl bg-zinc-950/70 p-4 space-y-2">
+            <div className="text-xs text-zinc-500 uppercase font-black">Game Total</div>
+            <p className="font-bold text-zinc-200">Over <span className="text-emerald-400">{percent(game.model.over)}</span></p>
+            <p className="font-bold text-zinc-200">Under <span className="text-emerald-400">{percent(game.model.under)}</span></p>
+            <p className="text-xs text-zinc-500">Modeled average score: {game.away} {game.model.projectedAway} · {game.home} {game.model.projectedHome}</p>
+          </div>
+        </div>
+        <p className="text-xs text-zinc-500">10,000 simulations · recent completed games: {game.away} {game.model.samples.away}, {game.home} {game.model.samples.home} · model estimates, not calibrated win probabilities</p>
+      </> : <p className="text-sm text-amber-400">Win Probability: Unverified | Total: Over Unverified | Under Unverified — insufficient verified history to simulate.</p>}
+      <div className="border-t border-zinc-800 pt-4 space-y-2">
+        <h4 className="font-black text-sm text-white">Players Who Will Make the Difference</h4>
+        {game.players.length ? game.players.map((p,i) => <p key={i} className="text-sm text-zinc-300">• {p}</p>) :
+          <p className="text-sm text-zinc-500">• No verified individual usage or leader data available; player impact not projected.</p>}
+      </div>
+      {game.sport === 'NFL' && <div className="border-t border-zinc-800 pt-4 space-y-2">
+        <h4 className="font-black text-sm text-white">Anytime TD Probabilities</h4>
+        <p className="text-sm text-zinc-500">• Unverified: current red-zone usage, player status and role-based TD data are needed. No percentages invented.</p>
+      </div>}
+      <div className="border-t border-zinc-800 pt-4 space-y-2">
+        <h4 className="font-black text-sm text-white">Key Prop Edges (8–10%+ edge vs. market)</h4>
+        {game.playerPropEdges.length ? game.playerPropEdges.filter(p=>p.edge >= 8).map((p,i)=>
+          <p key={i} className="text-sm text-zinc-300">• {p.player} – {p.market} – Sim {percent(p.probability)} vs. Market {percent(p.noVigMarket)} (+{p.edge.toFixed(1)}% edge) | {p.reason}</p>
+        ) : <p className="text-sm text-zinc-500">• None verified. Player-prop lines and both sides of the market are not available, so a no-vig 8–10% edge cannot be established.</p>}
+      </div>
+      {!!game.moneylineWatch.length && <div className="border-t border-zinc-800 pt-4 space-y-2">
+        <h4 className="font-black text-sm text-white">Moneyline Watch · exploratory model gaps</h4>
+        {game.moneylineWatch.map((w,i)=><p key={i} className="text-sm text-emerald-300">• {w.team}: Sim {percent(w.sim)} vs. market no-vig {percent(w.market)} (+{w.gap.toFixed(1)} points). Not a validated edge.</p>)}
+      </div>}
+      <details className="border-t border-zinc-800 pt-4 text-sm text-zinc-400">
+        <summary className="cursor-pointer font-bold">Missing / unverified inputs ({game.missing.length})</summary>
+        <ul className="mt-3 space-y-1 list-disc list-inside text-xs">{game.missing.map((m,i)=><li key={i}>{m}</li>)}</ul>
+      </details>
+    </section>)}
+    {analysis && <p className="text-xs text-zinc-500">Source: ESPN public game and team-history feeds. {analysis.window}. Updated {new Date(analysis.fetchedAt).toLocaleString('en-US')}. {analysis.note}</p>}
+  </div>;
 }
 
 function AutoNbaPropsView() {
