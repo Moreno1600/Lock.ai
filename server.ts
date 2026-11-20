@@ -1647,6 +1647,11 @@ async function startServer() {
       } catch (err: any) {
         // Fallback to schedule matchup
         const fallbackGame = nflFallbackWeek1Games.find(g => g.gameId === gameId);
+        if (!fallbackGame) {
+          // Without a verified game summary, rendering placeholder teams would
+          // misidentify the matchup and expose invented rosters.
+          return res.status(503).json({ error: "Verified NFL game summary is unavailable." });
+        }
         if (fallbackGame) {
           awayTricode = fallbackGame.awayTeam.teamTricode;
           homeTricode = fallbackGame.homeTeam.teamTricode;
@@ -2249,10 +2254,11 @@ async function startServer() {
         return res.json(games);
       }
     } catch (err: any) {
-      console.warn("ESPN NFL live fetch deferred, using cached Week 1 slate:", err.message);
+      console.warn("ESPN NFL live scoreboard unavailable:", err.message);
     }
 
-    res.json(nflFallbackWeek1Games);
+    // Never substitute outdated Week 1 fixtures for the current slate.
+    res.json([]);
   });
 
   // --- VITE MIDDLEWARE ---
