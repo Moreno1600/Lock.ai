@@ -1874,169 +1874,227 @@ type SlateAnalysisGame = {
   missing: string[];
 };
 function SlateLabView({ sport }: { sport: Sport }) {
-  const getToday = () => {
-    const fields = new Intl.DateTimeFormat('en-US', { timeZone: 'America/Chicago', year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(new Date());
-    const value = (type: string) => fields.find(p => p.type === type)?.value || '';
-    return value('year') + value('month') + value('day');
+  const today = () => {
+    const parts = new Intl.DateTimeFormat('en-US', {
+      timeZone: 'America/Chicago', year: 'numeric', month: '2-digit', day: '2-digit'
+    }).formatToParts(new Date());
+    const part = (type: string) => parts.find(p => p.type === type)?.value || '';
+    return part('year') + part('month') + part('day');
   };
-  const [date, setDate] = useState(getToday);
-  const [analysis, setAnalysis] = useState<{ games: SlateAnalysisGame[]; note: string; fetchedAt: string; window: string; sportsbook?: { status: string; message: string; fetchedAt: string | null } } | null>(null);
+  const [date, setDate] = useState(today);
+  const [analysis, setAnalysis] = useState<{
+    games: SlateAnalysisGame[];
+    note: string;
+    fetchedAt: string;
+    window: string;
+    sportsbook?: { status: string; message: string; fetchedAt: string | null };
+  } | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
-  const [refreshKey, setRefreshKey] = useState(0);
+  const [refresh, setRefresh] = useState(0);
+  const [expanded, setExpanded] = useState<string | null>(null);
+  const [filter, setFilter] = useState<'all'|'ready'|'watch'>('all');
+  const [copied, setCopied] = useState(false);
   useEffect(() => {
     let cancelled = false;
-    setLoading(true); setError(''); setAnalysis(null);
+    setLoading(true);
+    setAnalysis(null);
+    setError('');
+    setExpanded(null);
     axios.get('/api/edge-lab/slate', { params: { sport, date } })
-      .then(r => { if (!cancelled) setAnalysis(r.data); })
-      .catch(e => { if (!cancelled) setError(e.response?.data?.error || 'Verified slate data unavailable.'); })
+      .then(response => { if (!cancelled) setAnalysis(response.data); })
+      .catch(err => { if (!cancelled) setError(err.response?.data?.error || 'Unable to load the slate. Try Refresh.'); })
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
-  }, [sport, date, refreshKey]);
-  const percent = (v: number | null | undefined) => typeof v === 'number' && Number.isFinite(v) ? v.toFixed(1) + '%' : 'Unverified';
-  const americanPrice = (n: number | null | undefined) => typeof n === 'number' && Number.isFinite(n) ? (n > 0 ? '+' : '') + n : 'Unverified';
-  const dateInput = date.slice(0,4) + '-' + date.slice(4,6) + '-' + date.slice(6,8);
-  const [reportCopied, setReportCopied] = useState(false);
-  const copySlateReport = async () => {
-    if (!analysis?.games?.length) return;
-    const report = analysis.games.map(game => {
-      const m = game.model;
+  }, [sport, date, refresh]);
+  useEffect(() => { setCopied(false); setFilter('all'); }, [sport, date]);
+  const percent = (n: number | null | undefined) =>
+    typeof n === 'number' && Number.isFinite(n) ? n.toFixed(1) + '%' : '—';
+  const price = (n: number | null | undefined) =>
+    typeof n === 'number' && Number.isFinite(n) ? (n > 0 ? '+' : '') + n : '—';
+  const ready = analysis?.games.filter(g => !!g.model) || [];
+  const watch = analysis?.games.filter(g => g.moneylineWatch.length > 0 || (g.totalWatch || []).length > 0) || [];
+  const shown = (analysis?.games || []).filter(g =>
+    filter === 'all' || (filter === 'ready' && !!g.model) ||
+    (filter === 'watch' && (g.moneylineWatch.length > 0 || (g.totalWatch || []).length > 0))
+  );
+  const copyReport = async () => {
+    if (!analysis?.games.length) return;
+    const report = analysis.games.map(g => {
+      const m = g.model;
       return [
-        game.away + ' @ ' + game.home,
-        'Line: ' + (game.line || 'Unverified') + ' | Total: ' + (game.totalLine ?? 'Unverified'),
-        'Win Probability: ' + game.away + ' ' + percent(m?.winAway) + ' | ' + game.home + ' ' + percent(m?.winHome),
+        g.away + ' @ ' + g.home,
+        'Line: ' + (g.line || 'Not available') + ' | Total: ' + (g.totalLine ?? 'Not available'),
+        'Win Probability: ' + g.away + ' ' + percent(m?.winAway) + ' | ' + g.home + ' ' + percent(m?.winHome),
         'Total: Over ' + percent(m?.over) + ' | Under ' + percent(m?.under),
         'Players Who Will Make the Difference:',
-        ...(game.players.length ? game.players.map(p => '- ' + p) : ['- Unverified player role and usage']),
-        ...(game.sport === 'NFL' ? ['Anytime TD Probabilities (NFL games only — top realistic candidates per team):', '- Unverified: no player-specific usage/TD data'] : []),
+        ...(g.players.length ? g.players.map(p => '- ' + p) : ['- Verified player context unavailable']),
+        ...(g.sport === 'NFL' ? ['Anytime TD Probabilities:', '- Not modeled without verified player roles'] : []),
         'Key Prop Edges (8–10%+ edge vs. market):',
-        ...(game.playerPropEdges.filter(p => p.edge >= 8).length
-          ? game.playerPropEdges.filter(p => p.edge >= 8).map(p => '- ' + p.player + ' – ' + p.market + ' – Sim ' + percent(p.probability) + ' vs. Market ' + percent(p.noVigMarket) + ' (+' + p.edge.toFixed(1) + '% edge) | ' + p.reason)
-          : ['- None verified: no reliable two-sided player-prop markets']),
-        ...(game.sportsbookOdds?.moneyline ? ['Sportsbook moneyline (' + game.sportsbookOdds.moneyline.book + '): ' + game.away + ' ' + americanPrice(game.sportsbookOdds.moneyline.awayPrice) + ' | ' + game.home + ' ' + americanPrice(game.sportsbookOdds.moneyline.homePrice) + (game.sportsbookOdds.moneyline.fresh ? '' : ' [stale or unverified timestamp]')] : []),
-        ...(game.sportsbookOdds?.total ? ['Sportsbook total (' + game.sportsbookOdds.total.book + '): ' + game.sportsbookOdds.total.line + ' | Over ' + americanPrice(game.sportsbookOdds.total.overPrice) + ' | Under ' + americanPrice(game.sportsbookOdds.total.underPrice)] : []),
-        ...(game.moneylineWatch.length ? ['Moneyline model/market gaps (exploratory, not validated):', ...game.moneylineWatch.map(w => '- ' + w.team + ': Sim ' + percent(w.sim) + ' vs. Market ' + percent(w.market) + ' (+' + w.gap.toFixed(1) + ' pts)')] : []),
-        ...(game.totalWatch?.length ? ['Total model/market gaps (exploratory, not validated):', ...game.totalWatch.map(w => '- ' + w.side + ' ' + w.line + ': Sim ' + percent(w.sim) + ' vs. Market ' + percent(w.market) + ' (+' + w.gap.toFixed(1) + ' pts)')] : []),
-        'Notes: ' + game.missing.join('; ')
+        ...(g.playerPropEdges.filter(p => p.edge >= 8).map(p =>
+          '- ' + p.player + ' – ' + p.market + ' – Sim ' + percent(p.probability) +
+          ' vs. Market ' + percent(p.noVigMarket) + ' (+' + p.edge.toFixed(1) + '%) | ' + p.reason
+        ).concat(g.playerPropEdges.some(p => p.edge >= 8) ? [] : ['- No verified player-prop edges'])),
+        ...(g.moneylineWatch.length ? ['Moneyline watch:', ...g.moneylineWatch.map(w =>
+          '- ' + w.team + ' sim ' + percent(w.sim) + ' vs no-vig ' + percent(w.market) +
+          ', gap +' + w.gap.toFixed(1) + 'pp (exploratory)')] : [])
       ].join('\n');
     }).join('\n\n');
-    try { await navigator.clipboard.writeText(report); setReportCopied(true); }
-    catch { setReportCopied(false); setError('Could not copy the report. Check clipboard permissions.'); }
+    try {
+      await navigator.clipboard.writeText(report);
+      setCopied(true);
+    } catch { setError('Clipboard permission blocked copying this report.'); }
   };
-  useEffect(() => { setReportCopied(false); }, [sport, date]);
-  return <div className="max-w-6xl mx-auto space-y-6 pb-10">
-    <div className="flex flex-wrap items-center justify-between gap-4">
-      <div className="space-y-1">
-        <div className="flex items-center gap-2 text-emerald-400 text-xs font-black uppercase tracking-widest"><Target className="w-4 h-4" /> Lock.ai Slate Lab</div>
-        <h2 className="text-3xl md:text-4xl font-black tracking-tight text-white">10,000-Run Matchup Analysis</h2>
-        <p className="text-xs text-zinc-400">NBA & NFL · verified recent team results · transparent synthetic possession/drive model</p>
+  return <div className="max-w-6xl mx-auto space-y-5 pb-10">
+    <div className="flex flex-wrap items-end justify-between gap-4">
+      <div>
+        <div className="flex items-center gap-2 text-[10px] uppercase tracking-[0.18em] font-black text-emerald-400 mb-1">
+          <Target className="w-4 h-4" /> Lock.ai · {sport}
+        </div>
+        <h2 className="text-3xl font-black tracking-tight text-zinc-100">Slate Lab</h2>
+        <p className="text-sm text-zinc-500 mt-1">Matchup projections, totals and market comparisons</p>
       </div>
       <div className="flex flex-wrap items-center gap-2">
-        <button type="button" onClick={() => setDate(getToday())} className="rounded-xl border border-zinc-700 bg-zinc-900 px-4 py-3 text-xs font-black text-emerald-400 hover:border-emerald-600">Today</button>
-        <input aria-label="Slate date" type="date" value={dateInput}
-          onChange={e => { if (e.target.value) setDate(e.target.value.replace(/-/g, '')); }}
-          className="rounded-xl border border-zinc-700 bg-zinc-900 px-3 py-3 text-xs text-zinc-200" />
-        <button type="button" onClick={() => setRefreshKey(n => n + 1)}
-          disabled={loading} className="rounded-xl bg-emerald-500 px-4 py-3 text-xs font-black text-black disabled:opacity-50">
+        <button type="button" onClick={() => setDate(today())}
+          className="rounded-xl border border-zinc-700 px-3 py-2.5 text-xs font-bold text-zinc-200 hover:bg-zinc-800">Today</button>
+        <input aria-label="Slate date" type="date"
+          value={date.slice(0,4) + '-' + date.slice(4,6) + '-' + date.slice(6,8)}
+          onChange={e => { if (e.target.value) setDate(e.target.value.replace(/-/g,'')); }}
+          className="max-w-44 rounded-xl border border-zinc-700 bg-zinc-900 px-3 py-2.5 text-xs text-white" />
+        <button type="button" disabled={loading} onClick={() => setRefresh(n => n + 1)}
+          className="rounded-xl bg-emerald-500 px-4 py-2.5 text-xs font-black text-zinc-950 disabled:opacity-50">
           {loading ? 'Loading…' : 'Refresh'}
         </button>
-        <button type="button" onClick={copySlateReport} disabled={loading || !analysis?.games?.length}
-          className="rounded-xl border border-emerald-500/50 bg-emerald-500/10 px-4 py-3 text-xs font-black text-emerald-300 disabled:opacity-40">
-          {reportCopied ? 'Copied report' : 'Copy slate report'}
+        <button type="button" disabled={loading || !analysis?.games.length} onClick={copyReport}
+          className="rounded-xl border border-emerald-500/30 px-3 py-2.5 text-xs font-bold text-emerald-400 disabled:opacity-40">
+          {copied ? 'Copied' : 'Copy report'}
         </button>
       </div>
     </div>
-    <div className="rounded-xl border border-amber-500/20 bg-amber-500/5 p-4 text-xs text-amber-200 leading-relaxed">
-      <strong>Accuracy note:</strong> These are 10,000 simplified Monte Carlo draws per eligible game, not a fully calibrated play-by-play engine.
-      Injuries, confirmed minutes/snaps, coaching, outdoor weather, and player-prop modeling are not verified here. Moneyline/total sportsbook quotes are used only when the server feed is available and timestamps are usable.
-      Unpriced props and anytime-TD rates are withheld instead of guessed.
+    {analysis && <div className="flex flex-wrap items-center justify-between gap-3">
+      <div className="flex items-center gap-2 flex-wrap">
+        {([
+          ['all', 'All games', analysis.games.length],
+          ['ready', 'Simulated', ready.length],
+          ['watch', 'Model gaps', watch.length]
+        ] as const).map(([id,label,count]) => <button type="button" key={id}
+          onClick={() => setFilter(id)}
+          className={cn('rounded-lg px-3 py-2 text-xs font-bold transition-colors',
+            filter === id ? 'bg-emerald-500/15 text-emerald-300 border border-emerald-500/40' : 'bg-zinc-900 text-zinc-400 border border-zinc-800 hover:text-zinc-200')}>
+          {label} <span className="ml-1 opacity-70">{count}</span>
+        </button>)}
+      </div>
+      <span className="text-[11px] text-zinc-500">10,000 trials per modeled matchup</span>
+    </div>}
+    {loading && <div className="p-8 rounded-2xl border border-zinc-800 bg-zinc-900/50 text-zinc-400 text-sm">
+      Gathering recent games and calculating matchup probabilities…
+    </div>}
+    {!!error && <p className="p-4 rounded-xl border border-red-500/30 bg-red-500/5 text-sm text-red-300">{error}</p>}
+    {!loading && analysis && !analysis.games.length && <div className="p-8 text-sm text-zinc-400 rounded-2xl border border-zinc-800 bg-zinc-900/40">
+      No upcoming {sport} games found for this {sport === 'NFL' ? 'seven-day window' : 'date'}. Choose another date.
+    </div>}
+    {!loading && analysis && !!analysis.games.length && !shown.length && <p className="p-6 rounded-xl bg-zinc-900 text-sm text-zinc-400">
+      {filter === 'ready' ? 'No games have enough verified history to simulate yet.' : 'No model-to-market gaps meet the 8-point watch threshold.'}
+    </p>}
+    <div className="grid grid-cols-1 xl:grid-cols-2 gap-3">
+      {shown.map(game => {
+        const model = game.model;
+        const winner = model ? (model.winHome >= model.winAway ? game.home : game.away) : null;
+        const chance = model ? Math.max(model.winHome, model.winAway) : null;
+        const active = expanded === game.id;
+        const modelGapCount = game.moneylineWatch.length + (game.totalWatch || []).length;
+        return <article key={game.id} className={cn(
+          'rounded-2xl border bg-zinc-900/50 overflow-hidden transition-colors',
+          active ? 'border-emerald-500/40' : 'border-zinc-800 hover:border-zinc-700'
+        )}>
+          <div className="p-4 md:p-5 space-y-3">
+            <div className="flex items-center justify-between gap-3">
+              <span className="text-[10px] font-bold uppercase tracking-widest text-zinc-500">
+                {new Date(game.date).toLocaleString('en-US',{timeZone:'America/Chicago',weekday:'short',hour:'numeric',minute:'2-digit'})} CT
+              </span>
+              {modelGapCount > 0 ? <span className="text-[10px] font-black rounded-md bg-emerald-500/10 text-emerald-400 px-2 py-1">
+                {modelGapCount} model gap{modelGapCount > 1 ? 's' : ''}
+              </span> : model ? <span className="text-[10px] font-semibold text-zinc-500">Model ready</span> :
+                <span className="text-[10px] font-semibold text-amber-400">History unavailable</span>}
+            </div>
+            <h3 className="text-base md:text-lg font-black tracking-tight text-zinc-100">{game.away} <span className="text-zinc-600">@</span> {game.home}</h3>
+            <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-zinc-400">
+              <span>Spread <strong className="text-zinc-200">{game.line || '—'}</strong></span>
+              <span>Total <strong className="text-zinc-200">{game.totalLine ?? '—'}</strong></span>
+              {game.marketSource && <span className="text-zinc-600">via {game.marketSource}</span>}
+            </div>
+            {model ? <>
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <div className="text-[10px] uppercase tracking-widest text-zinc-500 font-bold">Model favorite</div>
+                  <div className="text-sm font-bold text-zinc-100 mt-0.5">{winner}</div>
+                </div>
+                <div className="text-3xl font-black tracking-tighter text-emerald-400">{percent(chance)}</div>
+              </div>
+              <div className="h-1.5 rounded-full bg-zinc-800 overflow-hidden flex" aria-label="Model win probability">
+                <div className="bg-emerald-500 h-full" style={{width: String(model.winAway) + '%'}} />
+                <div className="bg-indigo-400 h-full" style={{width: String(model.winHome) + '%'}} />
+              </div>
+              <div className="flex flex-wrap justify-between gap-2 text-[11px] text-zinc-400">
+                <span>{game.away} {percent(model.winAway)} · {game.home} {percent(model.winHome)}</span>
+                <span>Projected: {model.projectedAway}–{model.projectedHome}</span>
+              </div>
+              {game.totalLine !== null && <div className="rounded-lg bg-zinc-950/60 p-3 flex items-center justify-between text-xs gap-3">
+                <span className="text-zinc-400">Total {game.totalLine}</span>
+                <span className="font-bold text-zinc-200">Over {percent(model.over)} <span className="text-zinc-600 mx-1">/</span> Under {percent(model.under)}</span>
+              </div>}
+            </> : <p className="rounded-xl bg-zinc-950/60 px-3 py-3 text-xs text-zinc-400">
+              No verified game projection available yet. Spread and total above are market reference lines, not simulated picks.
+            </p>}
+            <button type="button" aria-expanded={active} onClick={() => setExpanded(active ? null : game.id)}
+              className="w-full flex items-center justify-between rounded-lg border border-zinc-800 bg-zinc-950/50 px-4 py-2.5 text-xs font-bold text-zinc-300 hover:border-emerald-500/40 hover:text-emerald-400">
+              {active ? 'Hide matchup details' : 'View matchup details'}
+              <ChevronDown className={cn('w-4 h-4 transition-transform',active && 'rotate-180')}/>
+            </button>
+          </div>
+          {active && <div className="border-t border-zinc-800 bg-zinc-950/35 p-4 md:p-5 space-y-4 text-xs">
+            {!!game.players.length && <div className="space-y-1">
+              <div className="font-black uppercase text-zinc-400 text-[10px] tracking-widest">Recent statistical leaders</div>
+              {game.players.map((player,i)=><p key={i} className="text-zinc-300">{player}</p>)}
+            </div>}
+            {(game.sportsbookOdds?.moneyline || game.sportsbookOdds?.total) && <div className="space-y-1">
+              <div className="font-black uppercase text-zinc-400 text-[10px] tracking-widest">Sportsbook quotes</div>
+              {game.sportsbookOdds.moneyline && <p className="text-zinc-300">
+                {game.sportsbookOdds.moneyline.book}: {game.away} {price(game.sportsbookOdds.moneyline.awayPrice)} · {game.home} {price(game.sportsbookOdds.moneyline.homePrice)}
+                {!game.sportsbookOdds.moneyline.fresh && <span className="text-amber-400"> · timestamp not verified</span>}
+              </p>}
+              {game.sportsbookOdds.total && <p className="text-zinc-300">
+                {game.sportsbookOdds.total.book}: O/U {game.sportsbookOdds.total.line} · Over {price(game.sportsbookOdds.total.overPrice)} / Under {price(game.sportsbookOdds.total.underPrice)}
+              </p>}
+            </div>}
+            {!!modelGapCount && <div className="space-y-1">
+              <div className="font-black uppercase text-emerald-400 text-[10px] tracking-widest">Model / market gaps · exploratory</div>
+              {game.moneylineWatch.map((w,i)=><p key={i} className="text-zinc-300">{w.team}: model {percent(w.sim)} vs no-vig {percent(w.market)} · +{w.gap.toFixed(1)}pp</p>)}
+              {game.totalWatch?.map((w,i)=><p key={i} className="text-zinc-300">{w.side} {w.line}: model {percent(w.sim)} vs no-vig {percent(w.market)} · +{w.gap.toFixed(1)}pp</p>)}
+              <p className="text-zinc-500">These gaps are not validated betting edges.</p>
+            </div>}
+            {game.sport === 'NFL' && <p className="text-zinc-500">Player-specific anytime TD probabilities aren't modeled yet.</p>}
+            {!game.playerPropEdges.length && <p className="text-zinc-500">Player-prop edges require verified player projections and both-sided market prices.</p>}
+            <details className="text-zinc-500">
+              <summary className="cursor-pointer">Data coverage & model limits</summary>
+              <ul className="list-disc list-inside space-y-1 mt-2">
+                {model && <li>{model.runs.toLocaleString()} draws · {model.samples.away} away-team results, {model.samples.home} home-team results</li>}
+                {game.missing.map((note,i)=><li key={i}>{note}</li>)}
+              </ul>
+            </details>
+          </div>}
+        </article>;
+      })}
     </div>
-    {analysis?.sportsbook && <div className="rounded-xl border border-zinc-800 bg-zinc-900/65 px-4 py-3 text-xs text-zinc-300">
-      <strong className={analysis.sportsbook.status === 'connected' ? 'text-emerald-400' : 'text-amber-400'}>Sportsbook feed: {analysis.sportsbook.status === 'connected' ? 'Connected' : 'Not active'}</strong>
-      <span className="ml-2">{analysis.sportsbook.message}</span>
-      {analysis.sportsbook.fetchedAt && <span className="ml-2 text-zinc-500">Retrieved {new Date(analysis.sportsbook.fetchedAt).toLocaleTimeString('en-US')}</span>}
-    </div>}
-    {loading && <div className="rounded-xl border border-zinc-800 bg-zinc-900/70 p-8 text-sm text-zinc-400">Loading real fixtures and verified team histories, then running 10,000 trials per game…</div>}
-    {!loading && error && <div className="rounded-xl border border-red-500/20 bg-red-500/5 p-6 text-sm text-red-300">{error}</div>}
-    {!loading && analysis && !analysis.games?.length && <div className="rounded-xl border border-zinc-800 bg-zinc-900/70 p-8 space-y-2">
-      <p className="font-bold text-white">No upcoming eligible {sport} games in this window.</p>
-      <p className="text-sm text-zinc-400">{sport === 'NBA' ? 'Pick another day above to analyze another NBA slate.' : 'NFL looks at the selected day and the next six days. Try the beginning of the game week.'} Final games are excluded from pregame simulations.</p>
-    </div>}
-    {analysis?.games?.map(game => <section key={game.id} className="rounded-2xl border border-zinc-800 bg-zinc-900/55 p-5 md:p-6 space-y-4">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <h3 className="text-xl font-black text-white">{game.away} @ {game.home}</h3>
-        <span className="text-xs text-zinc-500">{new Date(game.date).toLocaleString('en-US',{ timeZone:'America/Chicago', month:'short', day:'numeric', hour:'numeric', minute:'2-digit' })} CT</span>
+    {analysis && <details className="border border-zinc-800 rounded-xl text-zinc-500 text-xs">
+      <summary className="cursor-pointer p-4 font-semibold">Data sources and connection status</summary>
+      <div className="border-t border-zinc-800 p-4 space-y-2">
+        <p>ESPN completed games power the exploratory team scoring model. Odds are optional; they do not control whether simulations run.</p>
+        <p>Sportsbook: {analysis.sportsbook?.status === 'connected' ? 'Connected' : 'Offline'} · {analysis.sportsbook?.message || 'No quote source configured'}</p>
+        <p>{analysis.note}</p>
+        <p>Updated {new Date(analysis.fetchedAt).toLocaleString('en-US')}</p>
       </div>
-      <p className="text-sm text-zinc-300"><strong className="text-white">Line:</strong> {game.line || 'Unverified'} | <strong className="text-white">Total:</strong> {game.totalLine ?? 'Unverified'}{game.marketSource ? <span className="text-zinc-500"> · {game.marketSource}</span> : null}</p>
-      {(game.sportsbookOdds?.moneyline || game.sportsbookOdds?.total || game.sportsbookOdds?.spread) && <div className="rounded-xl border border-emerald-500/20 bg-zinc-950/65 p-4 space-y-2">
-        <h4 className="text-xs font-black uppercase text-emerald-400">Verified provider quotes · not betting recommendations</h4>
-        {game.sportsbookOdds?.moneyline && <p className="text-sm text-zinc-200">
-          <strong>{game.sportsbookOdds.moneyline.book}</strong> moneyline:
-          {' '}{game.away} {americanPrice(game.sportsbookOdds.moneyline.awayPrice)} / {game.home} {americanPrice(game.sportsbookOdds.moneyline.homePrice)}
-          <span className="text-zinc-500"> · no-vig {percent(game.sportsbookOdds.moneyline.noVigAway)} / {percent(game.sportsbookOdds.moneyline.noVigHome)}</span>
-          {!game.sportsbookOdds.moneyline.fresh && <span className="ml-2 text-amber-400">(stale/unknown timestamp)</span>}
-        </p>}
-        {game.sportsbookOdds?.total && <p className="text-sm text-zinc-300">
-          <strong>{game.sportsbookOdds.total.book}</strong> total {game.sportsbookOdds.total.line}:
-          {' '}Over {americanPrice(game.sportsbookOdds.total.overPrice)} / Under {americanPrice(game.sportsbookOdds.total.underPrice)}
-          {!game.sportsbookOdds.total.fresh && <span className="ml-2 text-amber-400">(stale/unknown timestamp)</span>}
-        </p>}
-        {game.sportsbookOdds?.spread && <p className="text-sm text-zinc-300">
-          <strong>{game.sportsbookOdds.spread.book}</strong> spread: {game.home} {game.sportsbookOdds.spread.homePoint > 0 ? '+' : ''}{game.sportsbookOdds.spread.homePoint}
-          {!game.sportsbookOdds.spread.fresh && <span className="ml-2 text-amber-400">(stale/unknown timestamp)</span>}
-        </p>}
-        {(game.sportsbookOdds?.bestAway || game.sportsbookOdds?.bestHome) && <p className="text-xs text-zinc-500">
-          Best available moneyline (may be stale): {game.away} {game.sportsbookOdds?.bestAway?.book || '—'} {americanPrice(game.sportsbookOdds?.bestAway?.price)}
-          {' · '}{game.home} {game.sportsbookOdds?.bestHome?.book || '—'} {americanPrice(game.sportsbookOdds?.bestHome?.price)}
-        </p>}
-      </div>}
-      {game.model ? <>
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-          <div className="rounded-xl bg-zinc-950/70 p-4 space-y-2">
-            <div className="text-xs text-zinc-500 uppercase font-black">Win Probability</div>
-            <p className="font-bold text-zinc-200">{game.away} <span className="text-emerald-400">{percent(game.model.winAway)}</span></p>
-            <p className="font-bold text-zinc-200">{game.home} <span className="text-emerald-400">{percent(game.model.winHome)}</span></p>
-            {game.sport === 'NFL' && <p className="text-xs text-zinc-500">Tie: {percent(game.model.tie)}</p>}
-          </div>
-          <div className="rounded-xl bg-zinc-950/70 p-4 space-y-2">
-            <div className="text-xs text-zinc-500 uppercase font-black">Game Total</div>
-            <p className="font-bold text-zinc-200">Over <span className="text-emerald-400">{percent(game.model.over)}</span></p>
-            <p className="font-bold text-zinc-200">Under <span className="text-emerald-400">{percent(game.model.under)}</span></p>
-            {game.model.push != null && game.model.push > 0 && <p className="text-xs text-zinc-500">Push: {percent(game.model.push)}</p>}
-            <p className="text-xs text-zinc-500">Modeled average score: {game.away} {game.model.projectedAway} · {game.home} {game.model.projectedHome}</p>
-          </div>
-        </div>
-        <p className="text-xs text-zinc-500">10,000 simulations · recent completed games: {game.away} {game.model.samples.away}, {game.home} {game.model.samples.home} · model estimates, not calibrated win probabilities</p>
-      </> : <p className="text-sm text-amber-400">Win Probability: Unverified | Total: Over Unverified | Under Unverified — insufficient verified history to simulate.</p>}
-      <div className="border-t border-zinc-800 pt-4 space-y-2">
-        <h4 className="font-black text-sm text-white">Players Who Will Make the Difference</h4>
-        {game.players.length ? game.players.map((p,i) => <p key={i} className="text-sm text-zinc-300">• {p}</p>) :
-          <p className="text-sm text-zinc-500">• No verified individual usage or leader data available; player impact not projected.</p>}
-      </div>
-      {game.sport === 'NFL' && <div className="border-t border-zinc-800 pt-4 space-y-2">
-        <h4 className="font-black text-sm text-white">Anytime TD Probabilities</h4>
-        <p className="text-sm text-zinc-500">• Unverified: current red-zone usage, player status and role-based TD data are needed. No percentages invented.</p>
-      </div>}
-      <div className="border-t border-zinc-800 pt-4 space-y-2">
-        <h4 className="font-black text-sm text-white">Key Prop Edges (8–10%+ edge vs. market)</h4>
-        {game.playerPropEdges.length ? game.playerPropEdges.filter(p=>p.edge >= 8).map((p,i)=>
-          <p key={i} className="text-sm text-zinc-300">• {p.player} – {p.market} – Sim {percent(p.probability)} vs. Market {percent(p.noVigMarket)} (+{p.edge.toFixed(1)}% edge) | {p.reason}</p>
-        ) : <p className="text-sm text-zinc-500">• No verified player-prop model comparisons yet. The sportsbook adapter currently reads game markets; player props and anytime-TD probabilities still need verified inputs.</p>}
-      </div>
-      {!!game.moneylineWatch.length && <div className="border-t border-zinc-800 pt-4 space-y-2">
-        <h4 className="font-black text-sm text-white">Moneyline Watch · exploratory model gaps</h4>
-        {game.moneylineWatch.map((w,i)=><p key={i} className="text-sm text-emerald-300">• {w.team}: Sim {percent(w.sim)} vs. market no-vig {percent(w.market)} (+{w.gap.toFixed(1)} points). Not a validated edge.</p>)}
-      </div>}
-      {!!game.totalWatch?.length && <div className="border-t border-zinc-800 pt-4 space-y-2">
-        <h4 className="font-black text-sm text-white">Total Watch · exploratory model gaps</h4>
-        {game.totalWatch.map((w,i)=><p key={i} className="text-sm text-emerald-300">• {w.side} {w.line}: Sim {percent(w.sim)} vs. market no-vig {percent(w.market)} (+{w.gap.toFixed(1)} points). Not a validated edge.</p>)}
-      </div>}
-      <details className="border-t border-zinc-800 pt-4 text-sm text-zinc-400">
-        <summary className="cursor-pointer font-bold">Missing / unverified inputs ({game.missing.length})</summary>
-        <ul className="mt-3 space-y-1 list-disc list-inside text-xs">{game.missing.map((m,i)=><li key={i}>{m}</li>)}</ul>
-      </details>
-    </section>)}
-    {analysis && <p className="text-xs text-zinc-500">Source: ESPN public game and team-history feeds. {analysis.window}. Updated {new Date(analysis.fetchedAt).toLocaleString('en-US')}. {analysis.note}</p>}
+    </details>}
   </div>;
 }
 
