@@ -1,5 +1,6 @@
 import axios from "axios";
 import type { Express } from "express";
+import { fetchSportsbookOdds, matchSportsbookEvent, summarizeSportsbookMarket } from "./oddsFeed.js";
 
 /**
  * Lock.ai Slate Lab: transparent 10,000-draw, team-level simulations.
@@ -220,6 +221,7 @@ export function registerSlateLab(app: Express) {
       const league = sport === "NBA" ? "basketball/nba" : "football/nfl";
       const source = await http(API + "/" + league + "/scoreboard",
         sport === "NBA" ? { dates: date, limit: 100 } : { limit: 100 });
+      const sportsbook = await fetchSportsbookOdds(sport);
       const events = (source.events || []).filter((event: any) => {
         if (completed(event) || !event.date) return false;
         if (event.status?.type?.state === "in") return false; // Pregame model cannot forecast a live game's remaining plays. // Never backtest using a game's final result.
@@ -236,8 +238,26 @@ export function registerSlateLab(app: Express) {
         const batch = await Promise.all(events.slice(index, index + 3).map(async (event: any) => {
         const pair = teamsForEvent(event);
         if (!pair) return null;
-        const market = parseMarket(event);
+        const espnMarket = parseMarket(event);
+        const providerEvent = matchSportsbookEvent(sportsbook, pair.away.name, pair.home.name, event.date);
+        const quoted = providerEvent ? summarizeSportsbookMarket(providerEvent) : null;
+        // Favor verified recent sportsbook totals; never blend odds from different books.
+        const trustedTotal = quoted?.total?.fresh ? quoted.total : null;
+        const totalLine = trustedTotal?.line ?? espnMarket.total;
+        const trustedMoneyline = quoted?.moneyline?.fresh ? quoted.moneyline : null;
+        const market = {
+          spread: quoted?.spread?.fresh ? pair.home.abbrev + " " + String(quoted.spread.homePoint) : espnMarket.spread,
+          total: totalLine,
+          noVigAway: trustedMoneyline?.noVigAway ?? null,
+          noVigHome: trustedMoneyline?.noVigHome ?? null,
+          source: trustedTotal || trustedMoneyline || quoted?.spread?.fresh ? "TheOddsAPI" : espnMarket.source
+        };
         const missing: string[] = [];
+        if (sportsbook.status !== "connected") missing.push("Sportsbook feed: " + sportsbook.message);
+        else if (!providerEvent) missing.push("No verified cross-provider matchup and kickoff match");
+        else if (!trustedMoneyline) missing.push("Fresh two-sided same-book moneyline prices unavailable; no market gap asserted");
+        if (quoted?.total && !quoted.total.fresh) missing.push("Provider totals quote timestamp is stale or missing");
+        if (quoted?.moneyline && !quoted.moneyline.fresh) missing.push("Provider moneyline quote timestamp is stale or missing");
         let model: any = null;
         let players: string[] = [];
         const [a, h, aLeader, hLeader] = await Promise.allSettled([
@@ -259,15 +279,24 @@ export function registerSlateLab(app: Express) {
         if (market.spread === null) missing.push("Verified pregame spread");
         missing.push("Confirmed injuries/lineups, rotations and coaching tendencies not incorporated");
         if (sport === "NFL") missing.push("Verified outdoor weather and play-level red-zone roles not incorporated");
-        missing.push("Player-prop markets and both-sided prices unavailable: no qualifying player-prop edge or anytime-TD rate can be asserted");
+        missing.push("Player-prop and anytime-TD model not yet wired: no qualifying player-prop edge or player-specific TD hit rate can be asserted");
+        // NFL markets are generally two-way, so remove model ties before a two-way comparison.
+        const winSum = model ? model.winAway + model.winHome : 0;
+        const comparableAway = model && sport === "NFL" && winSum > 0 ? rounded(100 * model.winAway / winSum) : model?.winAway;
+        const comparableHome = model && sport === "NFL" && winSum > 0 ? rounded(100 * model.winHome / winSum) : model?.winHome;
         const mlGap = model && market.noVigAway !== null && market.noVigHome !== null ? [
-          { team: pair.away.name, gap: rounded(model.winAway - market.noVigAway), sim: model.winAway, market: market.noVigAway },
-          { team: pair.home.name, gap: rounded(model.winHome - market.noVigHome), sim: model.winHome, market: market.noVigHome }
+          { team: pair.away.name, gap: rounded(comparableAway - market.noVigAway), sim: comparableAway, market: market.noVigAway },
+          { team: pair.home.name, gap: rounded(comparableHome - market.noVigHome), sim: comparableHome, market: market.noVigHome }
+        ].filter(v => v.gap >= 8).sort((x, y) => y.gap - x.gap) : [];
+        const totalGap = model && trustedTotal ? [
+          { side: "Over", line: trustedTotal.line, gap: rounded(model.over - trustedTotal.noVigOver), sim: model.over, market: trustedTotal.noVigOver },
+          { side: "Under", line: trustedTotal.line, gap: rounded(model.under - trustedTotal.noVigUnder), sim: model.under, market: trustedTotal.noVigUnder }
         ].filter(v => v.gap >= 8).sort((x, y) => y.gap - x.gap) : [];
         return {
           id: String(event.id), date: event.date, sport, away: pair.away.name, home: pair.home.name,
           line: market.spread, totalLine: market.total,
           marketSource: market.source, marketNoVigAway: market.noVigAway, marketNoVigHome: market.noVigHome,
+          sportsbookOdds: quoted, totalWatch: totalGap,
           model, players, anytimeTouchdowns: [], playerPropEdges: [], moneylineWatch: mlGap,
           verifiedThreshold: 8, missing
         };
@@ -276,8 +305,9 @@ export function registerSlateLab(app: Express) {
       }
       const payload = {
         sport, date, fetchedAt: new Date().toISOString(), games: games.filter(Boolean),
+        sportsbook: { status: sportsbook.status, message: sportsbook.message, fetchedAt: sportsbook.fetchedAt },
         note: "10,000 synthetic possession/drive trials per game from verified recent ESPN team scores. NBA uses a roughly 98-possession and 1.5-point home prior; NFL uses a roughly 11-drive and 1.2-point home prior. These are assumptions, not measured game tendencies. This is NOT actual play-by-play simulation, not adjusted for confirmed current injuries/weather/rotations/coaching, and not a calibrated betting model. Missing market data never becomes a fabricated edge.",
-        dataSource: "ESPN public site API; markets only when included in the ESPN game feed",
+        dataSource: "ESPN public game and team history; TheOddsAPI market prices where securely configured and matchable",
         window: sport === "NBA" ? "Selected calendar day" : "Selected day plus the next six days"
       };
       cache.set(key, { expires: Date.now() + 90_000, data: payload });
