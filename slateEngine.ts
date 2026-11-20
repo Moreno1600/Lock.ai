@@ -191,7 +191,8 @@ function simulation(sport: Sport, awayForm: ScoredGame[], homeForm: ScoredGame[]
   return {
     runs, winAway: pct(awayWins), winHome: pct(homeWins), tie: pct(draws),
     over: totalLine === null ? null : pct(over),
-    under: totalLine === null ? null : pct(under),\n    push: totalLine === null ? null : pct(pushes),
+    under: totalLine === null ? null : pct(under),
+    push: totalLine === null ? null : pct(pushes),
     projectedAway: rounded(sumAway / runs), projectedHome: rounded(sumHome / runs),
     samples: { away: awayForm.length, home: homeForm.length }
   };
