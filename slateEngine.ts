@@ -198,7 +198,7 @@ export function registerSlateLab(app: Express) {
       const league = sport === "NBA" ? "basketball/nba" : "football/nfl";
       const source = await http(API + "/" + league + "/scoreboard",
         sport === "NBA" ? { dates: date, limit: 100 } : { limit: 100 });
-      const sportsbook = await fetchSportsbookOdds(sport);
+      const sportsbookPending = fetchSportsbookOdds(sport);
       const events = (source.events || []).filter((event: any) => {
         if (completed(event) || !event.date) return false;
         if (event.status?.type?.state === "in") return false; // Pregame model cannot forecast a live game's remaining plays. // Never backtest using a game's final result.
@@ -232,6 +232,7 @@ export function registerSlateLab(app: Express) {
       if (teamList.length) {
         histories = await loadScoreboardFallback(sport, teamList, new Date().toISOString(), http, histories);
       }
+      const sportsbook = await sportsbookPending;
       // Bound ESPN requests to three games at a time.
       const games: any[] = [];
       for (let index = 0; index < events.length; index += 3) {
