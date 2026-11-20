@@ -51,7 +51,7 @@ const fresh = (iso: string | null) => {
 const leagueKey: Record<OddsSport, string> = {
   NBA: "basketball_nba", NFL: "americanfootball_nfl"
 };
-function normalizePayload(data: any): EventOdds[] {
+export function normalizePayload(data: any): EventOdds[] {
   const rows = Array.isArray(data?.data) ? data.data : Array.isArray(data) ? data : [];
   return rows.flatMap((event: any) => {
     if (!event?.home_team || !event?.away_team || !event?.start_time || !Array.isArray(event.books)) return [];
@@ -150,7 +150,7 @@ export function summarizeSportsbookMarket(event: EventOdds): MatchedMarket {
     event.markets.filter(m => m.market === market).flatMap(q => {
       const a = q.outcomes.find(x => nickname(x.name) === nickname(aName));
       const b = q.outcomes.find(x => nickname(x.name) === nickname(bName) &&
-        (market === "spreads" ? a?.point !== null && x.point === -a.point : a?.point === null || x.point === null || x.point === a.point));
+        (market === "spreads" ? !!a && a.point !== null && x.point === -a.point : !a || a.point === null || x.point === null || x.point === a.point));
       return a && b ? [{ q, a, b }] : [];
     });
   const twoWay = findPair("h2h", event.away, event.home).filter(x => x.a.name !== x.b.name);
