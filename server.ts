@@ -1,6 +1,7 @@
 import express from "express";
 import { createServer as createViteServer } from "vite";
 import axios from "axios";
+import { registerSlateLab } from "./slateEngine.js";
 import * as cheerio from "cheerio";
 import { GoogleGenAI } from "@google/genai";
 import cron from "node-cron";
@@ -1262,6 +1263,9 @@ async function startServer() {
       res.status(503).json({ error: "Could not build a parlay right now. Try again in a minute." });
     }
   });
+
+  // Transparent, verified-data NBA/NFL slate analysis.
+  registerSlateLab(app);
 
   // 4. Get Live Scoreboard
   app.get("/api/scoreboard", async (req, res) => {
