@@ -309,7 +309,7 @@ export default function App() {
   useEffect(() => {
     localStorage.setItem('lockai-favorites', JSON.stringify(favorites));
   }, [favorites]);
-  const [activeTab, setActiveTab] = useState<'home' | 'favorites' | 'optimizer' | 'soccer' | 'import' | 'tos'>('home');
+  const [activeTab, setActiveTab] = useState<'home' | 'favorites' | 'optimizer' | 'import' | 'tos'>('home');
 
   // Season availability — off-season sports show an unavailable notice instead of fake data
   const [seasonStatus, setSeasonStatus] = useState<Record<string, { active: boolean; resumes: string }> | null>(null);
@@ -686,7 +686,7 @@ export default function App() {
                     onClick={() => { setSport('NBA'); setActiveTab('home'); }}
                     className={cn(
                       "px-3 py-1.5 rounded text-[10px] font-black uppercase tracking-widest transition-all",
-                      sport === 'NBA' && activeTab !== 'soccer' 
+                      sport === 'NBA' 
                         ? "bg-zinc-800 text-emerald-400 shadow-sm" 
                         : "text-zinc-500 hover:text-zinc-300"
                     )}
@@ -694,38 +694,15 @@ export default function App() {
                     NBA
                   </button>
                   <button
-                    onClick={() => { setSport('MLB'); setActiveTab('home'); }}
-                    className={cn(
-                      "px-3 py-1.5 rounded text-[10px] font-black uppercase tracking-widest transition-all",
-                      sport === 'MLB' && activeTab !== 'soccer' 
-                        ? "bg-zinc-800 text-emerald-400 shadow-sm" 
-                        : "text-zinc-500 hover:text-zinc-300"
-                    )}
-                  >
-                    MLB
-                  </button>
-                  <button
                     onClick={() => { setSport('NFL'); setActiveTab('home'); }}
                     className={cn(
                       "px-3 py-1.5 rounded text-[10px] font-black uppercase tracking-widest transition-all",
-                      sport === 'NFL' && activeTab !== 'soccer' 
+                      sport === 'NFL' 
                         ? "bg-zinc-800 text-emerald-400 shadow-sm" 
                         : "text-zinc-500 hover:text-zinc-300"
                     )}
                   >
                     NFL
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => { setActiveTab('soccer'); setSelectedPlayer(null); }}
-                    className={cn(
-                      "px-3 py-1.5 rounded text-[10px] font-black uppercase tracking-widest transition-all",
-                      activeTab === 'soccer'
-                        ? "bg-zinc-800 text-emerald-400 shadow-sm"
-                        : "text-zinc-500 hover:text-zinc-300"
-                    )}
-                  >
-                    Soccer
                   </button>
                 </div>
               </div>
@@ -871,9 +848,7 @@ export default function App() {
               </>
             )}
 
-            {activeTab === 'soccer' ? (
-              <SoccerView />
-            ) : activeTab === 'favorites' ? (
+            {activeTab === 'favorites' ? (
               <FavoritesView favorites={favorites} setFavorites={setFavorites} sport={sport} />
             ) : activeTab === 'optimizer' ? (
               <OptimizerView favorites={favorites} setFavorites={setFavorites} setActiveTab={setActiveTab} sport={sport} seasonStatus={seasonStatus} />
@@ -900,7 +875,7 @@ export default function App() {
                         BET SMARTER.<br />NOT HARDER.
                       </h2>
                       <p className="text-[#9CA3AF] max-w-lg mx-auto text-base md:text-xl leading-relaxed font-mono tracking-[-0.02em]">
-                        Pro AI Tool for Winners. Data-backed picks for every parlay.
+                        NBA & NFL player research, matchup analysis, and data-backed prop insights.
                       </p>
                     </div>
 
@@ -1860,175 +1835,6 @@ export default function App() {
     </div>
   </div>
 );
-}
-
-function SoccerView() {
-  type Club = { id: string; name: string; logo: string | null; homeAway?: string; score?: string };
-  type Fixture = { id: string; name: string; date: string; status?: { type?: { description?: string } }; competitors: Club[] };
-  type PlayerInfo = { id: string; name: string; position?: string; jersey?: string | null; headshot?: string | null; starter?: boolean };
-  type ClubDetails = Club & { players: PlayerInfo[]; rosterAvailable: boolean; lineup: PlayerInfo[]; lineupConfirmed: boolean };
-  const [competition, setCompetition] = useState<'uefa.europa' | 'uefa.europa.conf' | 'uefa.champions' | 'eng.1' | 'esp.1'>('uefa.europa');
-  const [matches, setMatches] = useState<Fixture[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState('');
-  const todayDateKey = () => {
-    const now = new Date();
-    return `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}`;
-  };
-  const [date, setDate] = useState(todayDateKey);
-  const [selected, setSelected] = useState<string | null>(null);
-  const [details, setDetails] = useState<{ teams: ClubDetails[] } | null>(null);
-  const [detailLoading, setDetailLoading] = useState(false);
-  const [detailError, setDetailError] = useState('');
-  const [filter, setFilter] = useState('');
-  const [sim, setSim] = useState<any>(null);
-  const [simLoading, setSimLoading] = useState(false);
-  const [simError, setSimError] = useState('');
-  const runSimulation = async () => {
-    if (!selected) return;
-    setSimLoading(true); setSim(null); setSimError('');
-    try {
-      const result = await axios.get('/api/soccer/simulate/' + encodeURIComponent(selected), { params: { league: competition } });
-      const data = result.data;
-      const p = data?.probabilities;
-      if (!data?.home?.name || !data?.away?.name || !data?.samples ||
-          !data?.expectedGoals || !p ||
-          !['homeWin', 'draw', 'awayWin', 'over15', 'over25', 'over35', 'bttsYes'].every(k => Number.isFinite(p[k]))) {
-        throw new Error('Simulation returned incomplete data. Please retry later.');
-      }
-      setSim(data);
-    } catch (e: any) {
-      setSimError((e.response?.data?.error || e.message || 'Unable to run a verified simulation right now.') + (e.response?.data?.samples ? ` (Verified matches found: home ${e.response.data.samples.home}, away ${e.response.data.samples.away}.)` : ''));
-    } finally { setSimLoading(false); }
-  };
-  useEffect(() => { setSim(null); setSimError(''); }, [selected, competition, date]);
-
-  const detailsRef = useRef<HTMLElement | null>(null);
-  useEffect(() => {
-    if (selected) detailsRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-  }, [selected]);
-  useEffect(() => {
-    let cancelled = false;
-    setLoading(true); setError(''); setMatches([]); setSelected(null); setDetails(null);
-    axios.get('/api/soccer/fixtures', { params: { league: competition, date } })
-      .then(r => { if (!cancelled) setMatches(Array.isArray(r.data.events) ? r.data.events : []); })
-      .catch((e) => { if (!cancelled) setError(e.response?.data?.error || 'Fixtures unavailable right now.'); })
-      .finally(() => { if (!cancelled) setLoading(false); });
-    return () => { cancelled = true; };
-  }, [competition, date]);
-  useEffect(() => {
-    if (!selected) return;
-    let cancelled = false;
-    setDetails(null); setDetailError(''); setDetailLoading(true); setFilter('');
-    axios.get('/api/soccer/match/' + encodeURIComponent(selected), { params: { league: competition } })
-      .then(r => { if (!cancelled) setDetails(r.data); })
-      .catch(e => { if (!cancelled) setDetailError(e.response?.data?.error || 'Team rosters unavailable.'); })
-      .finally(() => { if (!cancelled) setDetailLoading(false); });
-    return () => { cancelled = true; };
-  }, [selected, competition]);
-  const logo = (club: Club, size = 'h-12 w-12') => club.logo
-    ? <img src={club.logo} alt={club.name + ' crest'} loading="lazy" className={size + ' object-contain'} onError={e => { e.currentTarget.style.display = 'none'; }} />
-    : <div aria-label={club.name + ' crest unavailable'} className={size + ' flex items-center justify-center rounded-xl bg-zinc-800 text-xs text-zinc-400'}>FC</div>;
-  return <div className="space-y-6">
-    <div className="flex flex-col sm:flex-row sm:items-center gap-3">
-      <div className="flex flex-1 gap-2 overflow-x-auto pb-2 sm:pb-0" role="tablist" aria-label="Soccer competitions">
-        {([
-          ['uefa.europa', 'Europa League'],
-          ['uefa.europa.conf', 'Conference League'],
-          ['uefa.champions', 'Champions League'],
-          ['eng.1', 'Premier League'],
-          ['esp.1', 'La Liga']
-        ] as const).map(([id, name]) =>
-          <button key={id} type="button" role="tab" aria-selected={competition === id}
-            onClick={() => setCompetition(id)}
-            className={cn('shrink-0 whitespace-nowrap rounded-xl px-4 py-3 text-xs font-bold transition-colors', competition === id ? 'bg-emerald-500 text-black' : 'bg-zinc-800 text-zinc-300 hover:bg-zinc-700')}>{name}</button>
-        )}
-      </div>
-      <div className="flex items-center gap-2">
-        <button type="button" onClick={() => setDate(todayDateKey())}
-          className="shrink-0 rounded-xl bg-zinc-800 px-3 py-3 text-xs font-bold text-emerald-400 hover:bg-zinc-700">
-          Today
-        </button>
-        <input aria-label="Match date" type="date" value={date.slice(0,4)+'-'+date.slice(4,6)+'-'+date.slice(6,8)}
-          onChange={e => { if (e.target.value) setDate(e.target.value.replace(/-/g,'')); }}
-          className="min-w-0 shrink rounded-xl bg-zinc-800 px-3 py-3 text-xs text-white" />
-      </div>
-    </div>
-    {loading ? <p className="text-zinc-400">Loading fixtures...</p> : error ? <p className="text-red-400">{error}</p> :
-      !matches.length ? <p className="text-zinc-400">No fixtures found for this date and competition.</p> :
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">{matches.map(m =>
-        <button type="button" key={m.id} onClick={() => { setSelected(m.id); setDetails(null); }} className={cn('text-left rounded-2xl border p-5 space-y-3 transition-colors',selected === m.id ? 'border-emerald-500 bg-emerald-500/5' : 'border-zinc-800 bg-zinc-900/60 hover:border-zinc-600')}>
-          <div className="text-xs text-emerald-400 font-bold">{m.status?.type?.description || 'Scheduled'} · {m.date ? new Date(m.date).toLocaleTimeString('en-US',{timeZone:'America/Chicago',hour:'numeric',minute:'2-digit'})+' CT' : ''}</div>
-          <div className="flex items-center justify-between gap-3">{m.competitors.map(t => <div key={t.id} className="flex flex-1 min-w-0 flex-col items-center gap-2 text-center">
-            {logo(t)}<span className="text-xs font-bold text-zinc-100">{t.name}</span>
-            {t.score !== undefined && <span className="text-sm font-black text-emerald-400">{t.score}</span>}
-          </div>)}</div>
-          <div className="flex items-center justify-center gap-2 rounded-lg bg-emerald-500/15 py-3 text-sm font-bold text-emerald-400">{selected === m.id ? "Viewing squads below" : "Tap to view squads & lineups"} <ChevronRight className="w-4 h-4" /></div>
-        </button>)}</div>}
-    {selected && <section ref={detailsRef} className="scroll-mt-24 rounded-3xl border border-emerald-500/50 bg-zinc-900/40 p-5 space-y-5">
-      <div className="flex items-center justify-between gap-3"><h3 className="text-lg font-black">Match Players</h3><button onClick={() => setSelected(null)} aria-label="Close match details"><X className="w-5 h-5" /></button></div>
-      <div className="rounded-2xl border border-emerald-500/30 bg-zinc-950 p-4 space-y-4">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div><h4 className="font-black text-zinc-100">5,000-Match Simulation</h4>
-            <p className="text-xs text-zinc-500">Domestic league + cup + European results · simplified goals model</p></div>
-          <button type="button" onClick={runSimulation} disabled={simLoading} className="rounded-xl bg-emerald-500 px-4 py-3 text-sm font-black text-black disabled:opacity-50">{simLoading ? 'Simulating...' : 'Run 5,000 Sims'}</button>
-        </div>
-        {simError && <p className="text-xs text-amber-400">{simError}</p>}
-        {sim && <div className="space-y-4">
-          <p className="text-xs text-zinc-400">Based on {sim.samples.home} recent {sim.home.name} matches and {sim.samples.away} recent {sim.away.name} matches from available team history.</p>
-          <div className="grid grid-cols-3 gap-2">{[
-            [sim.home.name + ' win', sim.probabilities.homeWin],
-            ['Draw', sim.probabilities.draw],
-            [sim.away.name + ' win', sim.probabilities.awayWin]
-          ].map(([label,value]) => <div key={String(label)} className="rounded-xl bg-zinc-900 p-3 text-center">
-            <div className="text-2xl font-black text-emerald-400">{value}%</div><div className="text-xs text-zinc-400 mt-1">{label}</div>
-          </div>)}</div>
-          <div className="grid grid-cols-2 gap-2">{[
-            ['Over 1.5 goals',sim.probabilities.over15],
-            ['Over 2.5 goals',sim.probabilities.over25],
-            ['Over 3.5 goals',sim.probabilities.over35],
-            ['Both teams score',sim.probabilities.bttsYes]
-          ].map(([label,value]) => <div key={String(label)} className="flex items-center justify-between rounded-xl bg-zinc-900 p-3 text-xs">
-            <span className="text-zinc-300">{label}</span><span className="font-black text-emerald-400">{value}%</span>
-          </div>)}</div>
-          {sim.teamContext && <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-            {([['Home', sim.home, sim.teamContext.home], ['Away', sim.away, sim.teamContext.away]] as const).map(([side, team, context]) =>
-              <div key={side} className="rounded-xl border border-zinc-800 bg-zinc-900 p-3 space-y-2">
-                <p className="font-bold text-sm text-zinc-100">{team.name} · {side}</p>
-                <p className="text-xs text-zinc-400">Recent wins: {context.recentWins}/{side === 'Home' ? sim.samples.home : sim.samples.away}</p>
-                {context.standing ? <p className="text-xs text-zinc-300">{context.standing.league} · League rank: {context.standing.rank ?? 'N/A'} · W/D/L: {context.standing.wins ?? '—'}/{context.standing.draws ?? '—'}/{context.standing.losses ?? '—'} · Points: {context.standing.points ?? '—'}</p> : <p className="text-xs text-zinc-500">Domestic league standing unavailable</p>}
-                <p className="text-xs text-zinc-500">Sources: {(context.leagues || []).join(', ') || 'None verified'}</p>
-                <p className="text-xs font-bold text-emerald-400">Key players · team stat leaders</p>
-                {context.keyPlayers?.length ? context.keyPlayers.map((p: any, i: number) =>
-                  <p key={p.id + i} className="text-xs text-zinc-300">{p.name} · {p.metric}{p.value ? ': ' + p.value : ''}</p>
-                ) : <p className="text-xs text-zinc-500">No verified club leaders returned</p>}
-                <p className="text-xs font-bold text-amber-400">Reported injuries</p>
-                {context.injuries?.length ? context.injuries.map((inj: any, i: number) => <p key={i} className="text-xs text-zinc-300">{inj.name} · {typeof inj.status === 'string' ? inj.status : 'Status reported'}</p>) : <p className="text-xs text-zinc-500">No injury reports returned; not confirmation of full fitness</p>}
-              </div>)}
-          </div>}
-          <p className="text-xs text-zinc-400">Expected goals: {sim.home.name} {sim.expectedGoals.home} · {sim.away.name} {sim.expectedGoals.away}</p>
-          <p className="text-xs text-amber-400">{sim.limitations} These are model estimates, not betting guarantees or bookmaker probabilities.</p>
-        </div>}
-      </div>
-      {detailLoading ? <p className="text-zinc-400 text-sm">Loading verified team squads...</p> : detailError ? <p className="text-red-400 text-sm">{detailError}</p> : details &&
-        <><input aria-label="Filter players" value={filter} onChange={e => setFilter(e.target.value)} placeholder="Filter players in this match..." className="w-full rounded-xl border border-zinc-700 bg-zinc-950 px-4 py-3 text-sm" />
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">{details.teams.map(team => {
-          const shown = team.players.filter(p => p.name.toLowerCase().includes(filter.toLowerCase()));
-          return <div key={team.id} className="rounded-2xl border border-zinc-800 bg-zinc-950/50 p-4 space-y-3">
-            <div className="flex items-center gap-3">{logo(team,'h-10 w-10')}<div><h4 className="font-black text-zinc-100">{team.name}</h4><p className="text-xs text-zinc-500">{team.rosterAvailable ? team.players.length + ' listed squad players' : 'Squad feed unavailable'}</p></div></div>
-            <div className="text-xs font-bold text-emerald-400">{team.lineupConfirmed ? 'Match participation data available' : 'Starting XI not yet verified'}</div>
-            {team.lineupConfirmed && <div className="rounded-xl bg-zinc-900 p-3 space-y-2">
-              <p className="text-xs font-black text-zinc-300">Published match players</p>
-              {team.lineup.filter(p=>p.name.toLowerCase().includes(filter.toLowerCase())).map(p => <p key={p.id} className="text-xs text-zinc-300">{p.starter ? '★ ' : ''}{p.name}{p.starter ? ' · Starter' : ''}</p>)}
-            </div>}
-            {team.rosterAvailable ? <div className="max-h-72 overflow-y-auto space-y-1">{shown.map(p => <div key={p.id} className="flex items-center justify-between gap-2 border-b border-zinc-800/60 py-2 text-xs">
-              <span className="text-zinc-200">{p.name}</span><span className="text-zinc-500">{p.position || 'Player'}{p.jersey ? ' · #'+p.jersey : ''}</span>
-            </div>)}{!shown.length && <p className="text-zinc-500 text-xs">No matching players</p>}</div> : <p className="text-xs text-amber-400">Cannot verify the squad for this club right now.</p>}
-          </div>;
-        })}</div></>}
-    </section>}
-    <p className="text-xs text-amber-400">A squad listing does not confirm a player is active, fit, or starting today. Only published match lineups can verify participation. No invented sportsbook odds or player props.</p>
-  </div>;
 }
 
 function AutoNbaPropsView() {
