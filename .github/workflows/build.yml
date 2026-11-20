@@ -23,6 +23,9 @@ jobs:
       - name: ESPN data source probe (non-blocking)
         continue-on-error: true
         run: npx tsx scripts/espnProbe.ts
+      - name: ESPN player prop data probe (non-blocking)
+        continue-on-error: true
+        run: npx tsx scripts/playerProbe.ts
       - name: Build frontend and server
         run: npm run build
       - name: Start built server and smoke-test API
