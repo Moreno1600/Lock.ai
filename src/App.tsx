@@ -1882,6 +1882,31 @@ function SlateLabView({ sport }: { sport: Sport }) {
   }, [sport, date, refreshKey]);
   const percent = (v: number | null | undefined) => typeof v === 'number' && Number.isFinite(v) ? v.toFixed(1) + '%' : 'Unverified';
   const dateInput = date.slice(0,4) + '-' + date.slice(4,6) + '-' + date.slice(6,8);
+  const [reportCopied, setReportCopied] = useState(false);
+  const copySlateReport = async () => {
+    if (!analysis?.games?.length) return;
+    const report = analysis.games.map(game => {
+      const m = game.model;
+      return [
+        game.away + ' @ ' + game.home,
+        'Line: ' + (game.line || 'Unverified') + ' | Total: ' + (game.totalLine ?? 'Unverified'),
+        'Win Probability: ' + game.away + ' ' + percent(m?.winAway) + ' | ' + game.home + ' ' + percent(m?.winHome),
+        'Total: Over ' + percent(m?.over) + ' | Under ' + percent(m?.under),
+        'Players Who Will Make the Difference:',
+        ...(game.players.length ? game.players.map(p => '- ' + p) : ['- Unverified player role and usage']),
+        ...(game.sport === 'NFL' ? ['Anytime TD Probabilities (NFL games only — top realistic candidates per team):', '- Unverified: no player-specific usage/TD data'] : []),
+        'Key Prop Edges (8–10%+ edge vs. market):',
+        ...(game.playerPropEdges.filter(p => p.edge >= 8).length
+          ? game.playerPropEdges.filter(p => p.edge >= 8).map(p => '- ' + p.player + ' – ' + p.market + ' – Sim ' + percent(p.probability) + ' vs. Market ' + percent(p.noVigMarket) + ' (+' + p.edge.toFixed(1) + '% edge) | ' + p.reason)
+          : ['- None verified: no reliable two-sided player-prop markets']),
+        ...(game.moneylineWatch.length ? ['Moneyline model/market gaps (exploratory, not validated):', ...game.moneylineWatch.map(w => '- ' + w.team + ': Sim ' + percent(w.sim) + ' vs. Market ' + percent(w.market) + ' (+' + w.gap.toFixed(1) + ' pts)')] : []),
+        'Notes: ' + game.missing.join('; ')
+      ].join('\n');
+    }).join('\n\n');
+    try { await navigator.clipboard.writeText(report); setReportCopied(true); }
+    catch { setReportCopied(false); setError('Could not copy the report. Check clipboard permissions.'); }
+  };
+  useEffect(() => { setReportCopied(false); }, [sport, date]);
   return <div className="max-w-6xl mx-auto space-y-6 pb-10">
     <div className="flex flex-wrap items-center justify-between gap-4">
       <div className="space-y-1">
@@ -1897,6 +1922,10 @@ function SlateLabView({ sport }: { sport: Sport }) {
         <button type="button" onClick={() => setRefreshKey(n => n + 1)}
           disabled={loading} className="rounded-xl bg-emerald-500 px-4 py-3 text-xs font-black text-black disabled:opacity-50">
           {loading ? 'Loading…' : 'Refresh'}
+        </button>
+        <button type="button" onClick={copySlateReport} disabled={loading || !analysis?.games?.length}
+          className="rounded-xl border border-emerald-500/50 bg-emerald-500/10 px-4 py-3 text-xs font-black text-emerald-300 disabled:opacity-40">
+          {reportCopied ? 'Copied report' : 'Copy slate report'}
         </button>
       </div>
     </div>
