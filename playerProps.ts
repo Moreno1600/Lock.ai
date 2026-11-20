@@ -130,7 +130,7 @@ export function parseESPNGamelog(sport: FormSport, data: any, beforeISO: string)
         if (!eventId || !dt || Date.parse(dt) >= Date.parse(beforeISO)) continue;
         const values = Array.isArray(event.stats) ? event.stats : [];
         if (!values.length) continue;
-        const prior = rows.get(eventId) || { date: dt, eventId, stats: {} };
+        const prior: FormGame = rows.get(eventId) || { date: dt, eventId, stats: {} };
         const keyMap = Object.keys(prior.stats);
         for (let i=0;i<values.length;i++) {
           const n = numeric(values[i]);
