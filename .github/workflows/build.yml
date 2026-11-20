@@ -29,6 +29,9 @@ jobs:
       - name: NFL gamelog shape probe (non-blocking)
         continue-on-error: true
         run: npx tsx scripts/nflShape.ts
+      - name: Real matchup and player form probe (non-blocking)
+        continue-on-error: true
+        run: npx tsx scripts/playerEndpointProbe.ts
       - name: Build frontend and server
         run: npm run build
       - name: Start built server and smoke-test API
