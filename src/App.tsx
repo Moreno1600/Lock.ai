@@ -1873,6 +1873,131 @@ type SlateAnalysisGame = {
   } | null;
   missing: string[];
 };
+type SlatePropMarket = {
+  stat: string; label: string; average: number; last5Average: number;
+  referenceLine: number; hits: number; sampleGames: number;
+  recent: Array<{ date: string; value: number }>;
+};
+type SlateFormPlayer = {
+  id: string; name: string; teamId: string; team: string; position: string;
+  headshot: string | null; status: string | null; sampleGames: number;
+  markets: SlatePropMarket[];
+};
+function SlatePropRow({ market }: { market: SlatePropMarket }) {
+  const [lineInput, setLineInput] = useState(String(market.referenceLine));
+  const line = Number(lineInput);
+  const valid = lineInput.trim() !== '' && Number.isFinite(line) && line >= 0;
+  const over = valid ? market.recent.filter(r => r.value > line).length : 0;
+  const below = valid ? market.recent.filter(r => r.value < line).length : 0;
+  const pushes = valid ? market.recent.length - over - below : 0;
+  return <div className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3 py-3 border-b border-zinc-800/60 last:border-none">
+    <div className="min-w-0 space-y-0.5">
+      <p className="text-sm font-bold text-zinc-200">{market.label}</p>
+      <p className="text-[11px] text-zinc-500">
+        Last {market.sampleGames} avg <span className="text-zinc-300 font-semibold">{market.average.toFixed(1)}</span>
+        <span className="mx-1.5 text-zinc-700">·</span>
+        Last 5 avg <span className="text-zinc-300 font-semibold">{market.last5Average.toFixed(1)}</span>
+      </p>
+      <p className="text-[10px] text-zinc-500">
+        Recent results: {market.recent.slice(0,5).map(v => v.value).join(', ')}
+      </p>
+    </div>
+    <div className="text-right space-y-1">
+      <label className="flex items-center justify-end gap-2">
+        <span className="text-[10px] text-zinc-500 uppercase font-bold">Line</span>
+        <input aria-label={market.label + " comparison line"}
+          inputMode="decimal" type="number" min="0" step="0.5"
+          value={lineInput} onChange={e => setLineInput(e.target.value)}
+          className="w-20 rounded-lg border border-zinc-700 bg-zinc-950 py-1.5 px-2 text-right text-sm font-bold text-white focus:border-emerald-500 focus:outline-none"/>
+      </label>
+      <p className="text-[11px] font-black text-emerald-400">
+        {valid ? 'Over ' + over + '/' + market.sampleGames + ' (' + (100 * over / market.sampleGames).toFixed(0) + '%)' : 'Enter line'}
+      </p>
+      {valid && <p className="text-[10px] text-zinc-500">Under {below}/{market.sampleGames}{pushes > 0 ? ' · Push ' + pushes : ''}</p>}
+    </div>
+  </div>;
+}
+function SlatePlayerForm({ gameId, sport }: { gameId: string; sport: Sport }) {
+  const [result, setResult] = useState<{
+    teams: Array<{id:string;name:string;abbrev:string}>;
+    players: SlateFormPlayer[];
+    unavailable: boolean;
+    reason: string | null;
+    note: string;
+  } | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+  const [showAll, setShowAll] = useState<Record<string,boolean>>({});
+  const [teamView, setTeamView] = useState<string>('all');
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true); setError(''); setResult(null);
+    axios.get('/api/edge-lab/matchup/' + encodeURIComponent(gameId) + '/player-form', { params: { sport } })
+      .then(response => { if (!cancelled) setResult(response.data); })
+      .catch(err => { if (!cancelled) setError(err.response?.data?.error || 'Could not load verified player game logs.'); })
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
+  }, [gameId,sport]);
+  return <section className="rounded-xl border border-zinc-800 bg-zinc-900/70 p-4 md:p-5 space-y-4">
+    <div className="flex flex-wrap items-center justify-between gap-3">
+      <div>
+        <h4 className="text-base font-black text-zinc-100">Player Form & Props</h4>
+        <p className="text-xs text-zinc-500 mt-0.5">
+          Verified recent box scores · edit any line to check its last-10 hit rate
+        </p>
+      </div>
+      <span className="text-[10px] text-amber-300 rounded-lg border border-amber-500/20 bg-amber-500/5 px-2.5 py-1.5">
+        Reference lines, not sportsbook odds
+      </span>
+    </div>
+    {loading && <div className="py-8 text-sm text-zinc-400 flex items-center gap-3">
+      <span className="w-4 h-4 rounded-full border-2 border-zinc-700 border-t-emerald-400 animate-spin" />
+      Loading real player game logs for both teams…
+    </div>}
+    {!!error && !loading && <p className="rounded-lg bg-red-500/10 p-3 text-sm text-red-300">{error}</p>}
+    {result && !loading && result.unavailable && <p className="rounded-lg bg-zinc-950 p-4 text-sm text-zinc-400">
+      {result.reason || 'No recent verified player form was returned for this matchup.'}
+    </p>}
+    {result && !!result.players.length && <>
+      <div className="flex flex-wrap gap-2">
+        <button type="button" onClick={() => setTeamView('all')}
+          className={cn("rounded-lg px-3 py-2 text-xs font-bold",teamView==='all'?'bg-emerald-500/15 text-emerald-300':'bg-zinc-950 text-zinc-400')}>
+          Both teams
+        </button>
+        {result.teams.map(team=><button type="button" key={team.id} onClick={() => setTeamView(team.id)}
+          className={cn("rounded-lg px-3 py-2 text-xs font-bold",teamView===team.id?'bg-emerald-500/15 text-emerald-300':'bg-zinc-950 text-zinc-400')}>
+          {team.abbrev}
+        </button>)}
+      </div>
+      <div className="grid grid-cols-1 2xl:grid-cols-2 gap-3">
+        {result.players.filter(player=>teamView==='all'||player.teamId===teamView).map(player=>
+          <div key={player.id} className="rounded-xl border border-zinc-800 bg-zinc-950/70 p-4">
+            <div className="flex items-center gap-3 mb-3">
+              {player.headshot ? <img src={player.headshot} alt="" className="w-12 h-12 rounded-full object-cover bg-zinc-900" referrerPolicy="no-referrer" /> :
+                <div className="w-12 h-12 rounded-full bg-zinc-800 flex items-center justify-center"><User className="w-6 h-6 text-zinc-600"/></div>}
+              <div className="min-w-0">
+                <p className="font-black text-zinc-100 truncate text-sm">{player.name}</p>
+                <p className="text-[11px] text-zinc-500">{player.team} · {player.position} · {player.sampleGames} verified games</p>
+              </div>
+            </div>
+            {player.markets.slice(0,showAll[player.id]?undefined:3).map(m=>
+              <SlatePropRow key={m.stat} market={m}/>)}
+            {player.markets.length > 3 && <button type="button"
+              onClick={()=>setShowAll(prev=>({...prev,[player.id]:!prev[player.id]}))}
+              className="w-full text-xs font-bold text-emerald-400 text-center py-3 hover:text-emerald-300">
+              {showAll[player.id]?'Show fewer props':'Show all ' + player.markets.length + ' categories'}
+            </button>}
+          </div>)}
+      </div>
+      <p className="text-xs text-zinc-500 leading-relaxed">
+        Reference lines are generated near each player's recent average, not fetched from a sportsbook.
+        These are descriptive historical hit rates—not simulated future hit probabilities or proof of an edge.
+        Verify lineups, injuries and market prices before drawing conclusions.
+      </p>
+    </>}
+  </section>;
+}
+
 function SlateLabView({ sport }: { sport: Sport }) {
   const today = () => {
     const parts = new Intl.DateTimeFormat('en-US', {
@@ -2053,6 +2178,7 @@ function SlateLabView({ sport }: { sport: Sport }) {
             </button>
           </div>
           {active && <div className="border-t border-zinc-800 bg-zinc-950/35 p-4 md:p-5 space-y-4 text-xs">
+            <SlatePlayerForm gameId={game.id} sport={sport} />
             {!!game.players.length && <div className="space-y-1">
               <div className="font-black uppercase text-zinc-400 text-[10px] tracking-widest">Recent statistical leaders</div>
               {game.players.map((player,i)=><p key={i} className="text-zinc-300">{player}</p>)}
@@ -2074,7 +2200,7 @@ function SlateLabView({ sport }: { sport: Sport }) {
               <p className="text-zinc-500">These gaps are not validated betting edges.</p>
             </div>}
             {game.sport === 'NFL' && <p className="text-zinc-500">Player-specific anytime TD probabilities aren't modeled yet.</p>}
-            {!game.playerPropEdges.length && <p className="text-zinc-500">Player-prop edges require verified player projections and both-sided market prices.</p>}
+            {!game.playerPropEdges.length && <p className="text-zinc-500">Sportsbook-relative player-prop edges will appear when player-level market quotes and calibrated projections are available. The form tracker above works without an odds API.</p>}
             <details className="text-zinc-500">
               <summary className="cursor-pointer">Data coverage & model limits</summary>
               <ul className="list-disc list-inside space-y-1 mt-2">
