@@ -689,7 +689,7 @@ export default function App() {
                 {/* League Toggle */}
                 <div className="flex items-center bg-zinc-900 border border-zinc-800 rounded-lg p-1 ml-0 md:ml-2">
                   <button
-                    onClick={() => { setSport('NBA'); setActiveTab('home'); }}
+                    onClick={() => { setSport('NBA'); setActiveTab(activeTab === 'edge-lab' ? 'edge-lab' : 'home'); }}
                     className={cn(
                       "px-3 py-1.5 rounded text-[10px] font-black uppercase tracking-widest transition-all",
                       sport === 'NBA' 
@@ -700,7 +700,7 @@ export default function App() {
                     NBA
                   </button>
                   <button
-                    onClick={() => { setSport('NFL'); setActiveTab('home'); }}
+                    onClick={() => { setSport('NFL'); setActiveTab(activeTab === 'edge-lab' ? 'edge-lab' : 'home'); }}
                     className={cn(
                       "px-3 py-1.5 rounded text-[10px] font-black uppercase tracking-widest transition-all",
                       sport === 'NFL' 
@@ -1850,7 +1850,7 @@ type SlateAnalysisGame = {
   line: string | null; totalLine: number | null; marketSource: string | null;
   model: null | {
     runs: number; winAway: number; winHome: number; tie: number;
-    over: number | null; under: number | null;
+    over: number | null; under: number | null; push?: number | null;
     projectedAway: number; projectedHome: number;
     samples: { away: number; home: number };
   };
@@ -1929,6 +1929,7 @@ function SlateLabView({ sport }: { sport: Sport }) {
             <div className="text-xs text-zinc-500 uppercase font-black">Game Total</div>
             <p className="font-bold text-zinc-200">Over <span className="text-emerald-400">{percent(game.model.over)}</span></p>
             <p className="font-bold text-zinc-200">Under <span className="text-emerald-400">{percent(game.model.under)}</span></p>
+            {game.model.push != null && game.model.push > 0 && <p className="text-xs text-zinc-500">Push: {percent(game.model.push)}</p>}
             <p className="text-xs text-zinc-500">Modeled average score: {game.away} {game.model.projectedAway} · {game.home} {game.model.projectedHome}</p>
           </div>
         </div>
