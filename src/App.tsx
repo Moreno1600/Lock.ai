@@ -1858,6 +1858,15 @@ type SlateAnalysisGame = {
   anytimeTouchdowns: Array<{ name: string; probability: number }>;
   playerPropEdges: Array<{ player: string; market: string; probability: number; noVigMarket: number; edge: number; reason: string }>;
   moneylineWatch: Array<{ team: string; gap: number; sim: number; market: number }>;
+  totalWatch: Array<{ side: string; line: number; gap: number; sim: number; market: number }>;
+  sportsbookOdds?: {
+    source: string;
+    moneyline: null | { book: string; awayPrice: number; homePrice: number; noVigAway: number; noVigHome: number; updatedAt: string | null; fresh: boolean };
+    total: null | { book: string; line: number; overPrice: number; underPrice: number; noVigOver: number; noVigUnder: number; updatedAt: string | null; fresh: boolean };
+    spread: null | { book: string; homePoint: number; awayPoint: number; updatedAt: string | null; fresh: boolean };
+    bestAway: null | { book: string; price: number };
+    bestHome: null | { book: string; price: number };
+  } | null;
   missing: string[];
 };
 function SlateLabView({ sport }: { sport: Sport }) {
@@ -1867,7 +1876,7 @@ function SlateLabView({ sport }: { sport: Sport }) {
     return value('year') + value('month') + value('day');
   };
   const [date, setDate] = useState(getToday);
-  const [analysis, setAnalysis] = useState<{ games: SlateAnalysisGame[]; note: string; fetchedAt: string; window: string } | null>(null);
+  const [analysis, setAnalysis] = useState<{ games: SlateAnalysisGame[]; note: string; fetchedAt: string; window: string; sportsbook?: { status: string; message: string; fetchedAt: string | null } } | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [refreshKey, setRefreshKey] = useState(0);
@@ -1881,6 +1890,7 @@ function SlateLabView({ sport }: { sport: Sport }) {
     return () => { cancelled = true; };
   }, [sport, date, refreshKey]);
   const percent = (v: number | null | undefined) => typeof v === 'number' && Number.isFinite(v) ? v.toFixed(1) + '%' : 'Unverified';
+  const americanPrice = (n: number | null | undefined) => typeof n === 'number' && Number.isFinite(n) ? (n > 0 ? '+' : '') + n : 'Unverified';
   const dateInput = date.slice(0,4) + '-' + date.slice(4,6) + '-' + date.slice(6,8);
   const [reportCopied, setReportCopied] = useState(false);
   const copySlateReport = async () => {
@@ -1899,7 +1909,10 @@ function SlateLabView({ sport }: { sport: Sport }) {
         ...(game.playerPropEdges.filter(p => p.edge >= 8).length
           ? game.playerPropEdges.filter(p => p.edge >= 8).map(p => '- ' + p.player + ' – ' + p.market + ' – Sim ' + percent(p.probability) + ' vs. Market ' + percent(p.noVigMarket) + ' (+' + p.edge.toFixed(1) + '% edge) | ' + p.reason)
           : ['- None verified: no reliable two-sided player-prop markets']),
+        ...(game.sportsbookOdds?.moneyline ? ['Sportsbook moneyline (' + game.sportsbookOdds.moneyline.book + '): ' + game.away + ' ' + americanPrice(game.sportsbookOdds.moneyline.awayPrice) + ' | ' + game.home + ' ' + americanPrice(game.sportsbookOdds.moneyline.homePrice) + (game.sportsbookOdds.moneyline.fresh ? '' : ' [stale or unverified timestamp]')] : []),
+        ...(game.sportsbookOdds?.total ? ['Sportsbook total (' + game.sportsbookOdds.total.book + '): ' + game.sportsbookOdds.total.line + ' | Over ' + americanPrice(game.sportsbookOdds.total.overPrice) + ' | Under ' + americanPrice(game.sportsbookOdds.total.underPrice)] : []),
         ...(game.moneylineWatch.length ? ['Moneyline model/market gaps (exploratory, not validated):', ...game.moneylineWatch.map(w => '- ' + w.team + ': Sim ' + percent(w.sim) + ' vs. Market ' + percent(w.market) + ' (+' + w.gap.toFixed(1) + ' pts)')] : []),
+        ...(game.totalWatch?.length ? ['Total model/market gaps (exploratory, not validated):', ...game.totalWatch.map(w => '- ' + w.side + ' ' + w.line + ': Sim ' + percent(w.sim) + ' vs. Market ' + percent(w.market) + ' (+' + w.gap.toFixed(1) + ' pts)')] : []),
         'Notes: ' + game.missing.join('; ')
       ].join('\n');
     }).join('\n\n');
@@ -1931,9 +1944,14 @@ function SlateLabView({ sport }: { sport: Sport }) {
     </div>
     <div className="rounded-xl border border-amber-500/20 bg-amber-500/5 p-4 text-xs text-amber-200 leading-relaxed">
       <strong>Accuracy note:</strong> These are 10,000 simplified Monte Carlo draws per eligible game, not a fully calibrated play-by-play engine.
-      Injuries, confirmed minutes/snaps, coaching, outdoor weather, and live player-prop prices are not verified here.
+      Injuries, confirmed minutes/snaps, coaching, outdoor weather, and player-prop modeling are not verified here. Moneyline/total sportsbook quotes are used only when the server feed is available and timestamps are usable.
       Unpriced props and anytime-TD rates are withheld instead of guessed.
     </div>
+    {analysis?.sportsbook && <div className="rounded-xl border border-zinc-800 bg-zinc-900/65 px-4 py-3 text-xs text-zinc-300">
+      <strong className={analysis.sportsbook.status === 'connected' ? 'text-emerald-400' : 'text-amber-400'}>Sportsbook feed: {analysis.sportsbook.status === 'connected' ? 'Connected' : 'Not active'}</strong>
+      <span className="ml-2">{analysis.sportsbook.message}</span>
+      {analysis.sportsbook.fetchedAt && <span className="ml-2 text-zinc-500">Retrieved {new Date(analysis.sportsbook.fetchedAt).toLocaleTimeString('en-US')}</span>}
+    </div>}
     {loading && <div className="rounded-xl border border-zinc-800 bg-zinc-900/70 p-8 text-sm text-zinc-400">Loading real fixtures and verified team histories, then running 10,000 trials per game…</div>}
     {!loading && error && <div className="rounded-xl border border-red-500/20 bg-red-500/5 p-6 text-sm text-red-300">{error}</div>}
     {!loading && analysis && !analysis.games?.length && <div className="rounded-xl border border-zinc-800 bg-zinc-900/70 p-8 space-y-2">
@@ -1946,6 +1964,28 @@ function SlateLabView({ sport }: { sport: Sport }) {
         <span className="text-xs text-zinc-500">{new Date(game.date).toLocaleString('en-US',{ timeZone:'America/Chicago', month:'short', day:'numeric', hour:'numeric', minute:'2-digit' })} CT</span>
       </div>
       <p className="text-sm text-zinc-300"><strong className="text-white">Line:</strong> {game.line || 'Unverified'} | <strong className="text-white">Total:</strong> {game.totalLine ?? 'Unverified'}{game.marketSource ? <span className="text-zinc-500"> · {game.marketSource}</span> : null}</p>
+      {(game.sportsbookOdds?.moneyline || game.sportsbookOdds?.total || game.sportsbookOdds?.spread) && <div className="rounded-xl border border-emerald-500/20 bg-zinc-950/65 p-4 space-y-2">
+        <h4 className="text-xs font-black uppercase text-emerald-400">Verified provider quotes · not betting recommendations</h4>
+        {game.sportsbookOdds?.moneyline && <p className="text-sm text-zinc-200">
+          <strong>{game.sportsbookOdds.moneyline.book}</strong> moneyline:
+          {' '}{game.away} {americanPrice(game.sportsbookOdds.moneyline.awayPrice)} / {game.home} {americanPrice(game.sportsbookOdds.moneyline.homePrice)}
+          <span className="text-zinc-500"> · no-vig {percent(game.sportsbookOdds.moneyline.noVigAway)} / {percent(game.sportsbookOdds.moneyline.noVigHome)}</span>
+          {!game.sportsbookOdds.moneyline.fresh && <span className="ml-2 text-amber-400">(stale/unknown timestamp)</span>}
+        </p>}
+        {game.sportsbookOdds?.total && <p className="text-sm text-zinc-300">
+          <strong>{game.sportsbookOdds.total.book}</strong> total {game.sportsbookOdds.total.line}:
+          {' '}Over {americanPrice(game.sportsbookOdds.total.overPrice)} / Under {americanPrice(game.sportsbookOdds.total.underPrice)}
+          {!game.sportsbookOdds.total.fresh && <span className="ml-2 text-amber-400">(stale/unknown timestamp)</span>}
+        </p>}
+        {game.sportsbookOdds?.spread && <p className="text-sm text-zinc-300">
+          <strong>{game.sportsbookOdds.spread.book}</strong> spread: {game.home} {game.sportsbookOdds.spread.homePoint > 0 ? '+' : ''}{game.sportsbookOdds.spread.homePoint}
+          {!game.sportsbookOdds.spread.fresh && <span className="ml-2 text-amber-400">(stale/unknown timestamp)</span>}
+        </p>}
+        {(game.sportsbookOdds?.bestAway || game.sportsbookOdds?.bestHome) && <p className="text-xs text-zinc-500">
+          Best available moneyline (may be stale): {game.away} {game.sportsbookOdds?.bestAway?.book || '—'} {americanPrice(game.sportsbookOdds?.bestAway?.price)}
+          {' · '}{game.home} {game.sportsbookOdds?.bestHome?.book || '—'} {americanPrice(game.sportsbookOdds?.bestHome?.price)}
+        </p>}
+      </div>}
       {game.model ? <>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
           <div className="rounded-xl bg-zinc-950/70 p-4 space-y-2">
@@ -1977,11 +2017,15 @@ function SlateLabView({ sport }: { sport: Sport }) {
         <h4 className="font-black text-sm text-white">Key Prop Edges (8–10%+ edge vs. market)</h4>
         {game.playerPropEdges.length ? game.playerPropEdges.filter(p=>p.edge >= 8).map((p,i)=>
           <p key={i} className="text-sm text-zinc-300">• {p.player} – {p.market} – Sim {percent(p.probability)} vs. Market {percent(p.noVigMarket)} (+{p.edge.toFixed(1)}% edge) | {p.reason}</p>
-        ) : <p className="text-sm text-zinc-500">• None verified. Player-prop lines and both sides of the market are not available, so a no-vig 8–10% edge cannot be established.</p>}
+        ) : <p className="text-sm text-zinc-500">• No verified player-prop model comparisons yet. The sportsbook adapter currently reads game markets; player props and anytime-TD probabilities still need verified inputs.</p>}
       </div>
       {!!game.moneylineWatch.length && <div className="border-t border-zinc-800 pt-4 space-y-2">
         <h4 className="font-black text-sm text-white">Moneyline Watch · exploratory model gaps</h4>
         {game.moneylineWatch.map((w,i)=><p key={i} className="text-sm text-emerald-300">• {w.team}: Sim {percent(w.sim)} vs. market no-vig {percent(w.market)} (+{w.gap.toFixed(1)} points). Not a validated edge.</p>)}
+      </div>}
+      {!!game.totalWatch?.length && <div className="border-t border-zinc-800 pt-4 space-y-2">
+        <h4 className="font-black text-sm text-white">Total Watch · exploratory model gaps</h4>
+        {game.totalWatch.map((w,i)=><p key={i} className="text-sm text-emerald-300">• {w.side} {w.line}: Sim {percent(w.sim)} vs. market no-vig {percent(w.market)} (+{w.gap.toFixed(1)} points). Not a validated edge.</p>)}
       </div>}
       <details className="border-t border-zinc-800 pt-4 text-sm text-zinc-400">
         <summary className="cursor-pointer font-bold">Missing / unverified inputs ({game.missing.length})</summary>
