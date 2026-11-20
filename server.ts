@@ -27,7 +27,6 @@ function getSeasonStatus() {
 
   // NBA: ~Oct 20 through the Finals (~June 22)
   const nbaActive = (m === 9 && d >= 20) || m >= 10 || m <= 4 || (m === 5 && d <= 22);
-  // MLB: ~Mar 25 through the World Series (~Nov 5)
   // NFL: ~Sept 1 through the Super Bowl (~Feb 15)
   const nflActive = (m >= 8 && m <= 11) || m === 0 || (m === 1 && d <= 15);
 
@@ -714,8 +713,8 @@ async function startServer() {
   // ==========================================
   // --- PARLAY GENERATOR ---
   // Builds parlays from today's real slate. Only works for in-season sports.
-  // MLB: hydrated rosters w/ season stats -> Poisson prop model -> L10 verification.
-  // NBA: season averages for teams playing today -> normal prop model.
+  // NBA: current-season averages for teams playing today.
+  // NFL: player stat profiles, with recent game-log checks where available.
   // ==========================================
 
   const mlbCandidateCache: { date: string; players: any[] } = { date: "", players: [] };
