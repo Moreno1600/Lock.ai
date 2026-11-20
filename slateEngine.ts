@@ -8,7 +8,7 @@ import type { Express } from "express";
  * No player-prop hit rates or market edges are invented when prop prices are absent.
  */
 type Sport = "NBA" | "NFL";
-type ScoredGame = { date: string; scored: number; allowed: number };
+type ScoredGame = { date: string; scored: number; allowed: number; lastGameLeader?: string };
 type Team = { id: string; name: string; abbrev: string; homeAway: string };
 const API = "https://site.api.espn.com/apis/site/v2/sports";
 const cache = new Map<string, { expires: number; data: any }>();
@@ -81,7 +81,16 @@ async function recentGames(sport: Sport, team: Team): Promise<ScoredGame[]> {
     const scored = getScore(own), allowed = getScore(other);
     if (scored === null || allowed === null || !event.date) continue;
     if (event.date > new Date().toISOString()) continue;
-    rows.push({ date: event.date, scored, allowed });
+    const statGroup = (own?.leaders || []).find((g: any) => Array.isArray(g.leaders) && g.leaders.length) || null;
+    const statLeader = statGroup?.leaders?.[0];
+    const athleteName = statLeader?.athlete?.displayName || statLeader?.athlete?.fullName;
+    const lastGameLeader = athleteName
+      ? String(athleteName) + " (" + team.abbrev + "): led a recent completed game in " +
+        String(statGroup.displayName || statGroup.name || "a team statistic") +
+        (statLeader.displayValue ? " (" + statLeader.displayValue + ")" : "") +
+        "; current injury status and matchup usage unverified"
+      : undefined;
+    rows.push({ date: event.date, scored, allowed, lastGameLeader });
   }
   rows.sort((a, b) => b.date.localeCompare(a.date));
   return rows.slice(0, sport === "NBA" ? 12 : 8);
@@ -134,7 +143,7 @@ function simulation(sport: Sport, awayForm: ScoredGame[], homeForm: ScoredGame[]
   const hDef = average(homeForm.map(g => g.allowed));
   const aMean = (aOff + hDef) / 2;
   const hMean = (hOff + aDef) / 2 + (sport === "NBA" ? 1.5 : 1.2);
-  let awayWins = 0, homeWins = 0, draws = 0, over = 0;
+  let awayWins = 0, homeWins = 0, draws = 0, over = 0, under = 0, pushes = 0;
   let sumAway = 0, sumHome = 0;
   for (let i = 0; i < runs; i++) {
     // Resample recent team-level form rather than assert current detailed usage.
@@ -172,12 +181,16 @@ function simulation(sport: Sport, awayForm: ScoredGame[], homeForm: ScoredGame[]
     if (awayPoints > homePoints) awayWins++;
     else if (homePoints > awayPoints) homeWins++;
     else draws++;
-    if (totalLine !== null && awayPoints + homePoints > totalLine) over++;
+    if (totalLine !== null) {
+      if (awayPoints + homePoints > totalLine) over++;
+      else if (awayPoints + homePoints < totalLine) under++;
+      else pushes++;
+    }
   }
   return {
     runs, winAway: pct(awayWins), winHome: pct(homeWins), tie: pct(draws),
     over: totalLine === null ? null : pct(over),
-    under: totalLine === null ? null : rounded(100 - pct(over)),
+    under: totalLine === null ? null : pct(under),\n    push: totalLine === null ? null : pct(pushes),
     projectedAway: rounded(sumAway / runs), projectedHome: rounded(sumHome / runs),
     samples: { away: awayForm.length, home: homeForm.length }
   };
@@ -234,7 +247,9 @@ export function registerSlateLab(app: Express) {
           missing.push("Insufficient verified recent game scores (needs " + minSample + "+ per team)");
         } else model = simulation(sport, af, hf, market.total);
         if (aLeader.status === "fulfilled" && aLeader.value) players.push(aLeader.value);
+        else if (af[0]?.lastGameLeader) players.push(af[0].lastGameLeader);
         if (hLeader.status === "fulfilled" && hLeader.value) players.push(hLeader.value);
+        else if (hf[0]?.lastGameLeader) players.push(hf[0].lastGameLeader);
         if (!players.length) missing.push("Verified individual player usage and team leaders");
         if (market.total === null) missing.push("Verified pregame total");
         if (market.spread === null) missing.push("Verified pregame spread");
