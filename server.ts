@@ -28,13 +28,11 @@ function getSeasonStatus() {
   // NBA: ~Oct 20 through the Finals (~June 22)
   const nbaActive = (m === 9 && d >= 20) || m >= 10 || m <= 4 || (m === 5 && d <= 22);
   // MLB: ~Mar 25 through the World Series (~Nov 5)
-  const mlbActive = (m === 2 && d >= 25) || (m >= 3 && m <= 9) || (m === 10 && d <= 5);
   // NFL: ~Sept 1 through the Super Bowl (~Feb 15)
   const nflActive = (m >= 8 && m <= 11) || m === 0 || (m === 1 && d <= 15);
 
   return {
     NBA: { active: nbaActive, resumes: "late October" },
-    MLB: { active: mlbActive, resumes: "late March" },
     NFL: { active: nflActive, resumes: "early September" }
   };
 }
@@ -708,8 +706,9 @@ async function startServer() {
   });
 
   // Season availability per sport
-  app.get("/api/season-status", (req, res) => {
-    res.json(getSeasonStatus());
+  app.get("/api/season-status", (_req, res) => {
+    const { NBA, NFL } = getSeasonStatus();
+    res.json({ NBA, NFL });
   });
 
   // ==========================================
@@ -925,7 +924,7 @@ async function startServer() {
   }
 
   app.get("/api/simulate/:gameId", async (req, res) => {
-    const sport = String(req.query.sport || "MLB").toUpperCase();
+    const sport = String(req.query.sport || "NBA").toUpperCase();
     const sims = Math.min(20000, Math.max(1000, parseInt(String(req.query.sims), 10) || 10000));
 
     const status: any = getSeasonStatus();
@@ -984,380 +983,7 @@ async function startServer() {
         return res.status(503).json({ error: "Could not load NBA game data for simulation." });
       }
     }
-    if (sport !== "MLB") {
-      return res.json({ unavailable: true, sport, reason: "Simulations are not yet supported for this sport." });
-    }
-    if (!status.MLB.active) {
-      return res.json({ unavailable: true, sport, resumes: status.MLB.resumes });
-    }
-
-    try {
-      // Find the matchup on the schedule (up to a week out, for late nights
-      // and the All-Star break)
-      const sched = await axios.get(
-        `https://statsapi.mlb.com/api/v1/schedule/games/?sportId=1&startDate=${localDateStr()}&endDate=${localDateStr(7)}`,
-        { timeout: 15000 }
-      );
-      let matchup: { homeId: number; awayId: number } | null = null;
-      (sched.data.dates || []).forEach((d: any) => d.games?.forEach((g: any) => {
-        if (!["R", "F", "D", "L", "W"].includes(g.gameType)) return; // no exhibitions
-        if (String(g.gamePk) === String(req.params.gameId)) {
-          matchup = { homeId: g.teams.home.team.id, awayId: g.teams.away.team.id };
-        }
-      }));
-      if (!matchup) {
-        return res.status(404).json({ error: "Game not found on today's slate." });
-      }
-
-      const [home, away] = await Promise.all([
-        getMlbTeamRates(matchup.homeId),
-        getMlbTeamRates(matchup.awayId)
-      ]);
-
-      // Expected runs: blend of a team's offense and the opponent's run prevention,
-      // with a small home-field bump (~4%)
-      const lambdaHome = ((home.rpg + away.rapg) / 2) * 1.04;
-      const lambdaAway = (away.rpg + home.rapg) / 2;
-
-      let homeWins = 0;
-      let homeRunsTotal = 0;
-      let awayRunsTotal = 0;
-      let homeCoversMinus15 = 0;
-      const totalsCounts: Record<number, number> = {};
-      const scoreCounts: Record<string, number> = {};
-
-      for (let i = 0; i < sims; i++) {
-        let h = samplePoisson(lambdaHome);
-        let a = samplePoisson(lambdaAway);
-        // Extra innings: no ties in baseball
-        while (h === a) {
-          h += samplePoisson(lambdaHome / 9);
-          a += samplePoisson(lambdaAway / 9);
-        }
-        if (h > a) homeWins++;
-        if (h - a >= 2) homeCoversMinus15++;
-        homeRunsTotal += h;
-        awayRunsTotal += a;
-        const total = h + a;
-        totalsCounts[total] = (totalsCounts[total] || 0) + 1;
-        const key = `${a}-${h}`;
-        scoreCounts[key] = (scoreCounts[key] || 0) + 1;
-      }
-
-      // Over probabilities for standard total-run lines
-      const totalLines = [6.5, 7.5, 8.5, 9.5, 10.5];
-      const totals = totalLines.map(line => {
-        let overCount = 0;
-        Object.entries(totalsCounts).forEach(([t, count]) => {
-          if (Number(t) > line) overCount += count;
-        });
-        return { line, overProb: Number((overCount / sims).toFixed(3)) };
-      });
-
-      // Distribution of total runs for the chart (trim the long tail)
-      const distribution = Object.entries(totalsCounts)
-        .map(([t, count]) => ({ total: Number(t), pct: Number((count / sims * 100).toFixed(1)) }))
-        .sort((a, b) => a.total - b.total)
-        .filter(d => d.total <= 18);
-
-      const topScore = Object.entries(scoreCounts).sort((a, b) => b[1] - a[1])[0];
-
-      res.json({
-        sport,
-        sims,
-        home: { teamId: matchup.homeId, tricode: home.name, winProb: Number((homeWins / sims).toFixed(3)), projRuns: Number((homeRunsTotal / sims).toFixed(1)), seasonRpg: Number(home.rpg.toFixed(2)), seasonRapg: Number(home.rapg.toFixed(2)) },
-        away: { teamId: matchup.awayId, tricode: away.name, winProb: Number(((sims - homeWins) / sims).toFixed(3)), projRuns: Number((awayRunsTotal / sims).toFixed(1)), seasonRpg: Number(away.rpg.toFixed(2)), seasonRapg: Number(away.rapg.toFixed(2)) },
-        runLine: {
-          homeMinus15: Number((homeCoversMinus15 / sims).toFixed(3)),
-          awayPlus15: Number(((sims - homeCoversMinus15) / sims).toFixed(3))
-        },
-        totals,
-        distribution,
-        mostCommonScore: topScore ? { score: topScore[0], pct: Number((topScore[1] / sims * 100).toFixed(1)) } : null
-      });
-    } catch (e: any) {
-      console.error("Simulation failed:", e.message);
-      res.status(503).json({ error: "Could not run the simulation right now." });
-    }
-  });
-
-  // Temporary UEFA match center: verified team IDs, logos, rosters and event lineups.
-  const soccerLeagues = ["uefa.europa", "uefa.europa.conf", "uefa.champions", "eng.1", "esp.1"];
-  const soccerCache = new Map<string, { until: number; data: any }>();
-  const soccerFetch = async (url: string, params?: Record<string, any>) => {
-    const key = url + JSON.stringify(params || {});
-    const cached = soccerCache.get(key);
-    if (cached && cached.until > Date.now()) return cached.data;
-    const response = await axios.get(url, { params, timeout: 5500 });
-    soccerCache.set(key, { until: Date.now() + 5 * 60 * 1000, data: response.data });
-    return response.data;
-  };
-  app.get("/api/soccer/fixtures", async (req, res) => {
-    const league = String(req.query.league || "");
-    const date = String(req.query.date || "");
-    if (!soccerLeagues.includes(league) || !/^\d{8}$/.test(date)) {
-      return res.status(400).json({ error: "Invalid competition or date" });
-    }
-    try {
-      const data = await soccerFetch(
-        `https://site.api.espn.com/apis/site/v2/sports/soccer/${league}/scoreboard`,
-        { dates: date, limit: 100 }
-      );
-      const events = (data.events || []).map((event: any) => ({
-        id: String(event.id), name: event.name, date: event.date, status: event.status,
-        competitors: (event.competitions?.[0]?.competitors || []).map((entry: any) => ({
-          id: String(entry.team?.id || entry.id),
-          name: entry.team?.displayName || entry.team?.name || "Unknown club",
-          homeAway: entry.homeAway, score: entry.score,
-          logo: entry.team?.logo || entry.team?.logos?.[0]?.href || null
-        }))
-      }));
-      return res.json({ events, source: "ESPN", fetchedAt: new Date().toISOString() });
-    } catch (error: any) {
-      console.warn("UEFA fixtures unavailable:", error.message);
-      return res.status(503).json({ error: "Soccer fixtures temporarily unavailable" });
-    }
-  });
-
-  app.get("/api/soccer/match/:eventId", async (req, res) => {
-    const league = String(req.query.league || "");
-    const eventId = String(req.params.eventId || "");
-    if (!soccerLeagues.includes(league) || !/^\d+$/.test(eventId)) {
-      return res.status(400).json({ error: "Invalid match" });
-    }
-    const base = `https://site.api.espn.com/apis/site/v2/sports/soccer/${league}`;
-    try {
-      const summary = await soccerFetch(`${base}/summary`, { event: eventId });
-      const teams = (summary.header?.competitions?.[0]?.competitors || []).map((c: any) => ({
-        id: String(c.team?.id || c.id), name: c.team?.displayName || c.team?.name || "Unknown club",
-        logo: c.team?.logo || c.team?.logos?.[0]?.href || null,
-        homeAway: c.homeAway
-      }));
-      if (teams.length !== 2) return res.status(502).json({ error: "Match teams could not be verified" });
-      const rosterResults = await Promise.all(teams.map(async (team: any) => {
-        try {
-          const data = await soccerFetch(`${base}/teams/${encodeURIComponent(team.id)}/roster`);
-          const groups = Array.isArray(data.athletes) ? data.athletes : [];
-          const athletes = groups.flatMap((group: any) => Array.isArray(group.items) ? group.items : [group])
-            .filter((p: any) => p?.id && p?.displayName)
-            .map((p: any) => ({
-              id: String(p.id), name: p.displayName,
-              position: p.position?.abbreviation || p.position?.displayName || "",
-              jersey: p.jersey || null, headshot: p.headshot?.href || null
-            }));
-          return { ...team, players: athletes, rosterAvailable: athletes.length > 0 };
-        } catch { return { ...team, players: [], rosterAvailable: false }; }
-      }));
-      // Event lineups are authoritative for who is actually playing. Never
-      // substitute a roster member for a confirmed starter.
-      const lineupByTeam = new Map<string, any[]>();
-      for (const c of summary.boxscore?.players || []) {
-        const id = String(c.team?.id || "");
-        const athletes = (c.statistics || []).flatMap((g: any) => g.athletes || []);
-        if (id && athletes.length) lineupByTeam.set(id, athletes.map((p: any) => ({
-          id: String(p.athlete?.id || ""), name: p.athlete?.displayName || "",
-          starter: p.starter === true, played: p.didNotPlay !== true
-        })).filter((p: any) => p.id && p.name));
-      }
-      return res.json({ eventId, source: "ESPN", teams: rosterResults.map((t: any) => ({
-        ...t, lineup: lineupByTeam.get(t.id) || [], lineupConfirmed: lineupByTeam.has(t.id)
-      })) });
-    } catch (error: any) {
-      console.warn("UEFA match details unavailable:", error.message);
-      return res.status(503).json({ error: "Match details temporarily unavailable" });
-    }
-  });
-
-  // Competition discovery: locate clubs by ESPN team ID OR normalized club name.
-  // UEFA and domestic competitions do not always share the same team ID.
-  const soccerDomesticLeagues = [
-    "eng.1", "eng.2", "esp.1", "esp.2", "ger.1", "ger.2", "ita.1", "ita.2",
-    "fra.1", "fra.2", "por.1", "ned.1", "bel.1", "sco.1", "tur.1", "gre.1",
-    "aut.1", "sui.1", "den.1", "nor.1", "swe.1", "pol.1", "cze.1",
-    "rou.1", "ukr.1", "cro.1", "ser.1", "eng.fa", "eng.league_cup",
-    "esp.copa_del_rey", "ger.dfb_pokal", "ita.coppa_italia",
-    "fra.coupe_de_france", "uefa.champions", "uefa.europa", "uefa.europa.conf"
-  ];
-  const soccerName = (name: string) => name.toLowerCase().normalize("NFKD")
-    .replace(/[\u0300-\u036f]/g, "").replace(/\b(fc|cf|sc|afc|fk|club|football|soccer)\b/g, "")
-    .replace(/[^a-z0-9]/g, "");
-  const soccerTeamIndex = new Map<string, Promise<any[]>>();
-  const soccerTeams = (league: string): Promise<any[]> => {
-    if (!soccerTeamIndex.has(league)) {
-      const pending = soccerFetch(`https://site.api.espn.com/apis/site/v2/sports/soccer/${league}/teams`, { limit: 200 })
-        .then(data => (data.sports?.[0]?.leagues?.[0]?.teams || []).map((entry: any) => entry.team || entry))
-        .catch(error => { soccerTeamIndex.delete(league); throw error; });
-      soccerTeamIndex.set(league, pending);
-    }
-    return soccerTeamIndex.get(league)!;
-  };
-  const soccerLeagueMemberships = async (team: any) => {
-    const results = await Promise.allSettled(soccerDomesticLeagues.map(async league => {
-      const candidates = await soccerTeams(league);
-      const match = candidates.find((t: any) =>
-        soccerName(t.displayName || t.name || "") === soccerName(team.name) ||
-        (String(t.id) === team.id && soccerName(t.displayName || t.name || "") === soccerName(team.name))
-      );
-      return match ? { league, id: String(match.id), name: match.displayName || match.name } : null;
-    }));
-    return results.flatMap(result => result.status === "fulfilled" && result.value ? [result.value] : []);
-  };
-  const soccerStandings = async (league: string, id: string) => {
-    try {
-      const data = await soccerFetch(`https://site.api.espn.com/apis/v2/sports/soccer/${league}/standings`);
-      const entries: any[] = [];
-      const visit = (node: any) => {
-        if (!node || typeof node !== "object") return;
-        if (Array.isArray(node)) { node.forEach(visit); return; }
-        if (node.team && node.stats) entries.push(node);
-        if (node.children) visit(node.children);
-        if (node.standings?.entries) visit(node.standings.entries);
-        if (node.entries) visit(node.entries);
-      };
-      visit(data);
-      const entry = entries.find(e => String(e.team?.id) === id);
-      if (!entry) return null;
-      const stat = (names: string[]) => entry.stats.find((x: any) =>
-        names.includes(x.name) || names.includes(x.abbreviation));
-      return { league, rank: stat(["rank", "RANK"])?.value ?? null,
-        wins: stat(["wins", "W"])?.value ?? null,
-        draws: stat(["ties", "draws", "D"])?.value ?? null,
-        losses: stat(["losses", "L"])?.value ?? null,
-        points: stat(["points", "P"])?.value ?? null };
-    } catch { return null; }
-  };
-  const soccerInjuries = async (league: string, id: string) => {
-    try {
-      const data = await soccerFetch(`https://site.api.espn.com/apis/site/v2/sports/soccer/${league}/teams/${id}/injuries`);
-      const entries = Array.isArray(data.injuries) ? data.injuries : [];
-      return entries.flatMap((entry: any) => {
-        const name = entry.athlete?.displayName || entry.athlete?.fullName;
-        return name ? [{ name, status: entry.status || entry.type?.description || "Reported injury",
-          detail: entry.details?.detail || entry.details?.type || null }] : [];
-      }).slice(0, 12);
-    } catch { return []; }
-  };
-
-  const soccerKeyPlayers = async (league: string, id: string) => {
-    try {
-      const data = await soccerFetch(`https://site.api.espn.com/apis/site/v2/sports/soccer/${league}/teams/${id}/leaders`);
-      const groups = Array.isArray(data.leaders) ? data.leaders : [];
-      const players = groups.flatMap((group: any) => (group.leaders || []).map((entry: any) => ({
-        id: String(entry.athlete?.id || ""),
-        name: entry.athlete?.displayName || entry.athlete?.fullName || "",
-        metric: group.displayName || group.name || "Team leader",
-        value: entry.displayValue || (Number.isFinite(entry.value) ? String(entry.value) : null)
-      }))).filter((p: any) => p.id && p.name);
-      return [...new Map(players.map((p: any) => [p.id + ":" + p.metric, p])).values()].slice(0, 8);
-    } catch { return []; }
-  };
-
-  // Temporary UEFA statistical simulator. Uses actual completed competition games.
-  // A minimum sample is required; never substitute made-up team form.
-  app.get("/api/soccer/simulate/:eventId", async (req, res) => {
-    const league = String(req.query.league || "");
-    const eventId = String(req.params.eventId || "");
-    if (!soccerLeagues.includes(league) || !/^\d+$/.test(eventId)) {
-      return res.status(400).json({ error: "Invalid competition or match" });
-    }
-    try {
-      const base = `https://site.api.espn.com/apis/site/v2/sports/soccer/${league}`;
-      const summary = await soccerFetch(`${base}/summary`, { event: eventId });
-      const fixture = summary.header?.competitions?.[0];
-      const teams = (fixture?.competitors || []).map((c: any) => ({
-        id: String(c.team?.id || c.id), name: c.team?.displayName || c.team?.name || "Unknown",
-        homeAway: c.homeAway
-      }));
-      if (teams.length !== 2 || !teams.some((t: any) => t.homeAway === "home")) {
-        return res.status(422).json({ error: "Match teams or home advantage not verified" });
-      }
-      const home = teams.find((t: any) => t.homeAway === "home");
-      const away = teams.find((t: any) => t.homeAway === "away");
-      const fixtureDate = new Date(summary.header?.competitions?.[0]?.date || summary.header?.competitions?.[0]?.startDate || Date.now());
-      if (!Number.isFinite(fixtureDate.getTime())) return res.status(422).json({ error: "Match date unavailable" });
-      const [homeLeagues, awayLeagues] = await Promise.all([
-        soccerLeagueMemberships(home), soccerLeagueMemberships(away)
-      ]);
-      const fetchForm = async (leagues: any[]) => {
-        const results = await Promise.allSettled(leagues.map(async (membership: any) => {
-          const schedules = await Promise.allSettled([fixtureDate.getUTCFullYear(), fixtureDate.getUTCFullYear() - 1].map(year =>
-            soccerFetch(`https://site.api.espn.com/apis/site/v2/sports/soccer/${membership.league}/teams/${membership.id}/schedule`, { season: year, limit: 200 })
-          ));
-          return schedules.flatMap(part => part.status === "fulfilled" ? (part.value.events || []) : [])
-            .map((event: any) => ({ event, league: membership.league, id: membership.id }));
-        }));
-        const entries = results.flatMap(part => part.status === "fulfilled" ? part.value : []);
-        const deduped = [...new Map(entries.map((row: any) => [row.league + ":" + row.event.id, row])).values()];
-        return deduped.flatMap((row: any) => {
-          const e = row.event, sides = e.competitions?.[0]?.competitors || [];
-          const ours = sides.find((c: any) => String(c.team?.id || c.id) === row.id);
-          const theirs = sides.find((c: any) => String(c.team?.id || c.id) !== row.id);
-          const scored = Number(ours?.score?.value ?? ours?.score);
-          const conceded = Number(theirs?.score?.value ?? theirs?.score);
-          const date = new Date(e.date).getTime();
-          const complete = e.status?.type?.completed === true || e.competitions?.[0]?.status?.type?.completed === true;
-          return complete && String(e.id) !== eventId && Number.isFinite(date) && date < fixtureDate.getTime() &&
-            ours?.score != null && theirs?.score != null && Number.isFinite(scored) && Number.isFinite(conceded)
-            ? [{ scored, conceded, date, league: row.league, win: scored > conceded }] : [];
-        }).sort((x: any, y: any) => y.date - x.date).slice(0, 12);
-      };
-      const [h, a] = await Promise.all([fetchForm(homeLeagues), fetchForm(awayLeagues)]);
-      const cupCodes = ["eng.fa", "eng.league_cup", "esp.copa_del_rey", "ger.dfb_pokal", "ita.coppa_italia", "fra.coupe_de_france"];
-      const domestic = (list: any[]) => list.find(l => !l.league.startsWith("uefa.") && !cupCodes.includes(l.league));
-      const homeDomestic = domestic(homeLeagues), awayDomestic = domestic(awayLeagues);
-      const [homeStanding, awayStanding, homeInjuries, awayInjuries, homeLeaders, awayLeaders] = await Promise.all([
-        homeDomestic ? soccerStandings(homeDomestic.league, homeDomestic.id) : null,
-        awayDomestic ? soccerStandings(awayDomestic.league, awayDomestic.id) : null,
-        homeDomestic ? soccerInjuries(homeDomestic.league, homeDomestic.id) : soccerInjuries(league, home.id),
-        awayDomestic ? soccerInjuries(awayDomestic.league, awayDomestic.id) : soccerInjuries(league, away.id),
-        homeDomestic ? soccerKeyPlayers(homeDomestic.league, homeDomestic.id) : soccerKeyPlayers(league, home.id),
-        awayDomestic ? soccerKeyPlayers(awayDomestic.league, awayDomestic.id) : soccerKeyPlayers(league, away.id)
-      ]);
-      if (h.length < 3 || a.length < 3) return res.status(422).json({
-        error: "Insufficient verified cross-competition results from ESPN. No simulation generated.",
-        samples: { home: h.length, away: a.length },
-        competitions: { home: homeLeagues.map(l => l.league), away: awayLeagues.map(l => l.league) }
-      });
-      const avg = (rows: any[], key: "scored" | "conceded") => rows.reduce((sum, row) => sum + row[key], 0) / rows.length;
-      const clamp = (v: number) => Math.max(0.25, Math.min(3.5, v));
-      // Simplified independent-Poisson model; NOT possession-level or player-prop simulation.
-      const lambdaHome = clamp((avg(h, "scored") + avg(a, "conceded")) / 2 * 1.08);
-      const lambdaAway = clamp((avg(a, "scored") + avg(h, "conceded")) / 2 * 0.92);
-      // Deterministic seeded PRNG makes refreshes reproducible for the same inputs.
-      let seed = [...(`${eventId}:${lambdaHome.toFixed(3)}:${lambdaAway.toFixed(3)}`)].reduce((n, ch) => ((n * 31 + ch.charCodeAt(0)) >>> 0), 2166136261);
-      const random = () => { seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0; return (seed + 0.5) / 4294967296; };
-      const poisson = (lambda: number) => {
-        const threshold = Math.exp(-lambda); let product = 1, count = 0;
-        do { count++; product *= random(); } while (product > threshold);
-        return count - 1;
-      };
-      const n = 5000;
-      let homeWins = 0, draws = 0, awayWins = 0, over15 = 0, over25 = 0, over35 = 0, btts = 0;
-      for (let i = 0; i < n; i++) {
-        const hg = poisson(lambdaHome), ag = poisson(lambdaAway);
-        if (hg > ag) homeWins++; else if (hg < ag) awayWins++; else draws++;
-        if (hg + ag > 1) over15++;
-        if (hg + ag > 2) over25++;
-        if (hg + ag > 3) over35++;
-        if (hg > 0 && ag > 0) btts++;
-      }
-      const pct = (count: number) => Math.round(count / n * 1000) / 10;
-      return res.json({
-        model: "Independent Poisson goals, recent cross-competition ESPN team results", simulations: n,
-        home, away, samples: { home: h.length, away: a.length },
-        teamContext: {
-          home: { standing: homeStanding, injuries: homeInjuries, keyPlayers: homeLeaders, leagues: homeLeagues.map(l => l.league), recentWins: h.filter(g => g.win).length },
-          away: { standing: awayStanding, injuries: awayInjuries, keyPlayers: awayLeaders, leagues: awayLeagues.map(l => l.league), recentWins: a.filter(g => g.win).length }
-        },
-        expectedGoals: { home: +lambdaHome.toFixed(2), away: +lambdaAway.toFixed(2) },
-        probabilities: { homeWin: pct(homeWins), draw: pct(draws), awayWin: pct(awayWins),
-          over15: pct(over15), over25: pct(over25), over35: pct(over35), bttsYes: pct(btts) },
-        limitations: "Uses domestic, cup and European results where available. Standings and injury reports are displayed as context, not factored into probabilities. No verified player-impact or bookmaker adjustment."
-      });
-    } catch (error: any) {
-      console.warn("UEFA simulation unavailable:", error.message);
-      return res.status(503).json({ error: "Verified match history unavailable for simulation" });
-    }
+    return res.json({ unavailable: true, sport, reason: "Game simulations are currently supported for NBA only." });
   });
 
   // Automatically generated NBA player-prop projections for today's scheduled teams.
@@ -1443,7 +1069,7 @@ async function startServer() {
   });
 
   app.get("/api/parlay/generate", async (req, res) => {
-    const sport = String(req.query.sport || "MLB").toUpperCase();
+    const sport = String(req.query.sport || "NBA").toUpperCase();
     const legCount = Math.min(6, Math.max(2, parseInt(String(req.query.legs), 10) || 3));
     const risk = ["safe", "balanced", "longshot"].includes(String(req.query.risk))
       ? String(req.query.risk) : "balanced";
@@ -1454,6 +1080,9 @@ async function startServer() {
       String(req.query.exclude || "").split(",").filter(Boolean).map(Number)
     );
 
+    if (sport !== "NBA" && sport !== "NFL") {
+      return res.status(400).json({ error: "Lock.ai currently supports NBA and NFL parlays only." });
+    }
     const status: any = getSeasonStatus();
     if (!status[sport]?.active) {
       return res.json({ unavailable: true, sport, resumes: status[sport]?.resumes });
@@ -1461,9 +1090,7 @@ async function startServer() {
 
     try {
       let candidates: any[] = [];
-      if (sport === "MLB") {
-        candidates = await getMlbCandidatesForToday();
-      } else if (sport === "NBA") {
+      if (sport === "NBA") {
         const sb = await axios.get(
           `https://cdn.nba.com/static/json/liveData/scoreboard/todaysScoreboard_00.json`,
           { timeout: 10000, headers: cdnHeaders }
@@ -1529,7 +1156,7 @@ async function startServer() {
         if (fresh.length >= legCount * 3) candidates = fresh;
       }
 
-      const model = sport === "MLB" ? "poisson" as const : "normal" as const;
+      const model = "normal" as const;
 
       // Every qualifying prop for every player — overs AND unders — grouped by stat category
       const byStat: Record<string, any[]> = {};
@@ -1582,20 +1209,8 @@ async function startServer() {
         }
       }
 
-      // Verify MLB/NFL legs against their actual game logs
-      if (sport === "MLB") {
-        const checks = await Promise.all(
-          shortlist.map(p => mlbL10(p.playerId, p.statCategory, p.line, p.direction))
-        );
-        shortlist.forEach((p, i) => {
-          p.l10 = checks[i];
-          if (checks[i]) {
-            const l10Rate = checks[i]!.hits / checks[i]!.games;
-            p.modelProbability = p.probability;
-            p.probability = 0.5 * p.probability + 0.5 * l10Rate; // blend model with recent form
-          }
-        });
-      } else if (sport === "NFL") {
+      // Blend NFL modeled props with observed recent game-log hit rates.
+      if (sport === "NFL") {
         shortlist.forEach(p => {
           const logs = nflGamelogs[p.playerId] || [];
           if (logs.length > 0) {
@@ -2356,155 +1971,6 @@ async function startServer() {
     }
   });
 
-
-  // --- MLB API ROUTES ---
-
-  // 1. MLB Player Search
-  app.get("/api/mlb/players/search", async (req, res) => {
-    const query = (req.query.q as string || "").toLowerCase();
-    if (!query) return res.json([]);
-    
-    try {
-      const response = await axios.get(
-        `https://statsapi.mlb.com/api/v1/people/search?names=${encodeURIComponent(query)}&activeStatus=active`,
-        { timeout: 10000 }
-      );
-      
-      const results = response.data.people || [];
-      const players = results.map((p: any) => ({
-        PERSON_ID: p.id,
-        DISPLAY_FIRST_LAST: p.fullName,
-        TEAM_ABBREVIATION: p.currentTeam?.abbreviation || "MLB",
-        TEAM_NAME: p.currentTeam?.name || "MLB",
-        TEAM_ID: p.currentTeam?.id || "",
-        HEADSHOT: `https://img.mlbstatic.com/mlb-photos/image/upload/d_multi_fallback_custom.png/w_213,q_auto:best/v1/people/${p.id}/headshot/67/current`
-      }));
-      
-      res.json(players);
-    } catch (error) {
-      console.error("MLB Search error:", error);
-      res.json([]);
-    }
-  });
-
-  // 2. MLB Player Game Log
-  app.get("/api/mlb/players/:id/gamelog", async (req, res) => {
-    const playerId = req.params.id;
-    try {
-      // We need to check if they are a hitter or pitcher, but for now we'll try hitting first
-      // In a real app, we might check player position first
-      const response = await axios.get(
-        `https://statsapi.mlb.com/api/v1/people/${playerId}/stats?stats=gameLog&group=hitting,pitching&season=2026`,
-        { timeout: 10000 }
-      );
-      
-      const stats = response.data.stats || [];
-      const games: any[] = [];
-      
-      stats.forEach((statGroup: any) => {
-        const group = statGroup.group.displayName;
-        statGroup.splits?.forEach((s: any) => {
-          const game: any = {
-            GAME_DATE: s.date,
-            MATCHUP: s.opponent?.name || "Unknown",
-            WL: s.isWin ? "W" : "L",
-            GROUP: group
-          };
-
-          if (group === "hitting") {
-            game.H = s.stat.hits || 0;
-            game.HR = s.stat.homeRuns || 0;
-            game.RBI = s.stat.rbi || 0;
-            game.R = s.stat.runs || 0;
-            game.SB = s.stat.stolenBases || 0;
-            game.AVG = s.stat.avg || ".000";
-            game.TB = s.stat.totalBases || 0;
-            game.H_R_RBI = game.H + game.R + game.RBI;
-            game.PTS = game.H_R_RBI; // Custom "Points" for MLB hitters
-          } else if (group === "pitching") {
-            game.IP = s.stat.inningsPitched || "0.0";
-            game.SO = s.stat.strikeOuts || 0;
-            game.ER = s.stat.earnedRuns || 0;
-            game.H_ALLOWED = s.stat.hits || 0;
-            game.H = game.H_ALLOWED;
-            game.BB = s.stat.baseOnBalls || 0;
-            
-            // Calculate Outs Recorded
-            const ipStr = String(game.IP);
-            const [innings, partial] = ipStr.split(".").map(Number);
-            game.OUTS = (innings || 0) * 3 + (partial || 0);
-            
-            game.PTS = game.SO; // Custom "Points" for MLB pitchers
-          }
-          
-          games.push(game);
-        });
-      });
-      
-      res.json(games.reverse()); // Most recent first
-    } catch (error) {
-      console.error("MLB Gamelog error:", error);
-      res.json([]);
-    }
-  });
-
-  // 3. MLB Scoreboard
-  app.get("/api/mlb/scoreboard", async (req, res) => {
-    if (!getSeasonStatus().MLB.active) return res.json([]);
-    try {
-      // Look up to a week ahead: after the last game of the night (or during
-      // the All-Star break) show the next slate instead of an empty board
-      const response = await axios.get(
-        `https://statsapi.mlb.com/api/v1/schedule/games/?sportId=1&startDate=${localDateStr()}&endDate=${localDateStr(7)}`,
-        {
-          timeout: 20000,
-          headers: {
-            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
-          }
-        }
-      );
-
-      const dates = response.data.dates || [];
-      let games: any[] = [];
-
-      for (const d of dates) {
-        if (games.length > 0) break; // first day with playable games only
-        d.games?.forEach((g: any) => {
-          if (!["R", "F", "D", "L", "W"].includes(g.gameType)) return; // regular season + playoffs only
-          // abstractGameState: 1 = Preview, 2 = Live, 3 = Final
-          const gameStatus = g.status.abstractGameState === "Final" ? 3 : g.status.abstractGameState === "Live" ? 2 : 1;
-          const detailedState = (g.status.detailedState || "").toLowerCase();
-          const isFinished = gameStatus === 3 || detailedState.includes("final") || detailedState.includes("game over") || detailedState.includes("completed");
-          const isPostponed = detailedState.includes("postponed") || detailedState.includes("cancel");
-
-          // Filter out final, postponed, or canceled games
-          if (!isFinished && !isPostponed) {
-            games.push({
-              gameId: g.gamePk,
-              gameStatus: gameStatus,
-              gameStatusText: g.status.detailedState,
-              gameTimeUTC: g.gameDate,
-              awayTeam: {
-                teamId: g.teams.away.team.id,
-                teamTricode: mlbTricodes[g.teams.away.team.id] || g.teams.away.team.name.substring(0, 3).toUpperCase(),
-                score: g.teams.away.score || 0
-              },
-              homeTeam: {
-                teamId: g.teams.home.team.id,
-                teamTricode: mlbTricodes[g.teams.home.team.id] || g.teams.home.team.name.substring(0, 3).toUpperCase(),
-                score: g.teams.home.score || 0
-              }
-            });
-          }
-        });
-      }
-
-      res.json(games);
-    } catch (error) {
-      console.warn("MLB Scoreboard API unavailable. Returning no games.");
-      res.json([]);
-    }
-  });
 
   // -- Feature 5: Injury Impact Score --
   app.get("/api/injury-impact/:playerName", async (req, res) => {
