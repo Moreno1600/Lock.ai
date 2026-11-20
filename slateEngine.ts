@@ -221,7 +221,8 @@ export function registerSlateLab(app: Express) {
       const source = await http(API + "/" + league + "/scoreboard",
         sport === "NBA" ? { dates: date, limit: 100 } : { limit: 100 });
       const events = (source.events || []).filter((event: any) => {
-        if (completed(event) || !event.date) return false; // Never backtest using a game's final result.
+        if (completed(event) || !event.date) return false;
+        if (event.status?.type?.state === "in") return false; // Pregame model cannot forecast a live game's remaining plays. // Never backtest using a game's final result.
         const dateOfGame = dayKey(event.date);
         if (sport === "NBA") return dateOfGame === date;
         // ESPN's NFL scoreboard is a weekly slate; restrict to the selected 7-day window.
@@ -229,7 +230,10 @@ export function registerSlateLab(app: Express) {
         const current = Date.UTC(+dateOfGame.slice(0, 4), +dateOfGame.slice(4, 6) - 1, +dateOfGame.slice(6, 8));
         return current >= first && current < first + 7 * 86_400_000;
       }).slice(0, 25);
-      const games = await Promise.all(events.map(async (event: any) => {
+      // Bound ESPN requests to three games at a time.
+      const games: any[] = [];
+      for (let index = 0; index < events.length; index += 3) {
+        const batch = await Promise.all(events.slice(index, index + 3).map(async (event: any) => {
         const pair = teamsForEvent(event);
         if (!pair) return null;
         const market = parseMarket(event);
@@ -267,10 +271,12 @@ export function registerSlateLab(app: Express) {
           model, players, anytimeTouchdowns: [], playerPropEdges: [], moneylineWatch: mlGap,
           verifiedThreshold: 8, missing
         };
-      }));
+        }));
+        games.push(...batch);
+      }
       const payload = {
         sport, date, fetchedAt: new Date().toISOString(), games: games.filter(Boolean),
-        note: "10,000 synthetic possession/drive trials per game from verified recent ESPN team scores. This is NOT actual play-by-play simulation, not adjusted for confirmed current injuries/weather/rotations/coaching, and not a calibrated betting model. Missing market data never becomes a fabricated edge.",
+        note: "10,000 synthetic possession/drive trials per game from verified recent ESPN team scores. NBA uses a roughly 98-possession and 1.5-point home prior; NFL uses a roughly 11-drive and 1.2-point home prior. These are assumptions, not measured game tendencies. This is NOT actual play-by-play simulation, not adjusted for confirmed current injuries/weather/rotations/coaching, and not a calibrated betting model. Missing market data never becomes a fabricated edge.",
         dataSource: "ESPN public site API; markets only when included in the ESPN game feed",
         window: sport === "NBA" ? "Selected calendar day" : "Selected day plus the next six days"
       };
